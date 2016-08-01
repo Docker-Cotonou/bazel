@@ -39,6 +39,7 @@ import com.google.devtools.build.lib.vfs.Path;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -108,10 +109,9 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     Preconditions.checkNotNull(actionMetadata.getKey());
     hasher.putString(actionMetadata.getKey(), Charset.defaultCharset());
 
-    List<ActionInput> inputs =
-        ActionInputHelper.expandArtifacts(
-            spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
-    for (ActionInput input : inputs) {
+    List<ActionInput> inputs = new ArrayList<>();
+    for (ActionInput input : spawn.getInputFiles()) {
+      inputs.add(input);
       hasher.putString(input.getExecPathString(), Charset.defaultCharset());
       try {
         // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
