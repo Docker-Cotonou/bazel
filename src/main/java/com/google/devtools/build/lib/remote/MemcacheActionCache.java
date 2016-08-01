@@ -57,6 +57,10 @@ public final class MemcacheActionCache implements RemoteActionCache {
   @Override
   public String putFileIfNotExist(Path file) throws IOException {
     System.err.println("putFileIfNotExist - file: " + file.toString());
+    // HACK https://github.com/bazelbuild/bazel/issues/1413
+    // Test cacheStatus output is generated after execution
+    // so it doesn't exist in time for us to store it in the remote cache
+    if (!file.exists()) return null;
     String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
     if (containsFile(contentKey)) {
       return contentKey;
@@ -66,14 +70,18 @@ public final class MemcacheActionCache implements RemoteActionCache {
   }
 
   @Override
-  public String putFileIfNotExist(ActionInputFileCache cache, ActionInput file) throws IOException {
+  public String putFileIfNotExist(ActionInputFileCache cache, ActionInput input) throws IOException {
     System.err.println("putFileIfNotExist - action input: " + file.toString());
-    // PerActionFileCache already converted this to a lowercase ascii string.. it's not consistent!
-    String contentKey = new String(cache.getDigest(file).toByteArray());
+    // HACK https://github.com/bazelbuild/bazel/issues/1413
+    // Test cacheStatus output is generated after execution
+    // so it doesn't exist in time for us to store it in the remote cache
+    Path file = execRoot.getRelative(input.getExecPathString());
+    if (!file.exists()) return null;
+    String contentKey = HashCode.fromBytes(cache.getDigest(input)).toString();
     if (containsFile(contentKey)) {
       return contentKey;
     }
-    putFile(contentKey, execRoot.getRelative(file.getExecPathString()));
+    putFile(contentKey, file);
     return contentKey;
   }
 
@@ -161,6 +169,10 @@ public final class MemcacheActionCache implements RemoteActionCache {
   private void addToActionOutput(Path file, String execPathString, CacheEntry.Builder actionOutput)
       throws IOException {
     System.err.println("addToActionOutput - file: " + file + ", execPathString : "+ execPathString);
+    // HACK https://github.com/bazelbuild/bazel/issues/1413
+    // Test cacheStatus output is generated after execution
+    // so it doesn't exist in time for us to store it in the remote cache
+    if (!file.exists()) return;
     if (file.isDirectory()) {
       // TODO(alpha): Implement this for directory.
       throw new UnsupportedOperationException("Storing a directory is not yet supported.");
