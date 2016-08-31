@@ -22,6 +22,14 @@ import com.google.devtools.common.options.OptionsBase;
  */
 public final class RemoteOptions extends OptionsBase {
   @Option(
+    name = "s3_remote_cache_bucket",
+    defaultValue = "null",
+    category = "remote",
+    help = "Use an s3 bucket"
+  )
+  public String s3CacheBucket;
+
+  @Option(
     name = "hazelcast_node",
     defaultValue = "null",
     category = "remote",

@@ -22,6 +22,7 @@ java_library(
         "//src/main/protobuf:remote_protocol_java_proto",
         "//third_party:apache_httpclient",
         "//third_party:apache_httpcore",
+        "//third_party:aws",
         "//third_party:gson",
         "//third_party:guava",
         "//third_party:hazelcast",

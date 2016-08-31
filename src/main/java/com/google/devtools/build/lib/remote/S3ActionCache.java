@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.remote;
 
+import com.amazonaws.auth.EnvironmentVariableCredentialsProvider;
+import com.amazonaws.services.s3.model.*;
 import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
@@ -24,6 +26,14 @@ import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 
+import com.amazonaws.AmazonClientException;
+import com.amazonaws.AmazonServiceException;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.internal.Constants;
+
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,26 +42,24 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
 
 /**
- * A RemoteActionCache implementation that uses memcache as a distributed storage
- * for files and action output. The memcache is accessed by the {@link ConcurrentMap}
- * interface.
- *
- * The thread satefy is guaranteed by the underlying memcache client.
+ * xcxc
  */
 @ThreadSafe
-public final class MemcacheActionCache implements RemoteActionCache {
+public final class S3ActionCache implements RemoteActionCache {
   private final Path execRoot;
-  private final ConcurrentMap<String, byte[]> cache;
-  private static final int MAX_MEMORY_KBYTES = 512 * 1024;
-  private final Semaphore uploadMemoryAvailable = new Semaphore(MAX_MEMORY_KBYTES, true);
+  private final String bucketName;
+
+  // xcxc add retry wrappers ...
+  private final AmazonS3 client = new AmazonS3Client(new EnvironmentVariableCredentialsProvider());
+
 
   /**
    * Construct an action cache using JCache API.
    */
-  public MemcacheActionCache(
-      Path execRoot, RemoteOptions options, ConcurrentMap<String, byte[]> cache) {
+  public S3ActionCache(Path execRoot, RemoteOptions options) {
+    System.err.println("CREATING S3ActionCache");
     this.execRoot = execRoot;
-    this.cache = cache;
+    this.bucketName = options.s3CacheBucket;
   }
 
   @Override
@@ -77,52 +85,62 @@ public final class MemcacheActionCache implements RemoteActionCache {
     return contentKey;
   }
 
-  private void putFile(String key, Path file) throws IOException {
-    System.err.println("putFile - key: " + key + ", file: " + file.toString());
-    int fileSizeKBytes = (int) (file.getFileSize() / 1024);
-    Preconditions.checkArgument(fileSizeKBytes < MAX_MEMORY_KBYTES);
-    try {
-      uploadMemoryAvailable.acquire(fileSizeKBytes);
-      // TODO(alpha): I should put the file content as chunks to avoid reading the entire
-      // file into memory.
-      try (InputStream stream = file.getInputStream()) {
-        cache.put(
-            key,
-            CacheEntry.newBuilder()
-                .setFileContent(ByteString.readFrom(stream))
-                .build()
-                .toByteArray());
-      }
-    } catch (InterruptedException e) {
-      throw new IOException("Failed to put file to memory cache.", e);
-    } finally {
-      uploadMemoryAvailable.release(fileSizeKBytes);
-    }
-  }
-
   @Override
   public void writeFile(String key, Path dest, boolean executable)
       throws IOException, CacheNotFoundException {
     System.err.println("writeFile - key: " + key + ", dest: " + dest);
-    byte[] data = cache.get(key);
-    if (data == null) {
-      throw new CacheNotFoundException("File content cannot be found with key: " + key);
-    }
+    InputStream data = getBlob(key);
     try (OutputStream stream = dest.getOutputStream()) {
       CacheEntry.parseFrom(data).getFileContent().writeTo(stream);
       dest.setExecutable(executable);
     }
   }
 
+  private void putFile(String key, Path file) throws IOException {
+    InputStream stream = file.getInputStream();
+    putBlob(key, CacheEntry.newBuilder().setFileContent(ByteString.readFrom(stream)).build().toByteArray());
+  }
+
+
   private boolean containsFile(String key) {
-    return cache.containsKey(key);
+    // xcxc asdf
+    System.err.println("rj xcxc containsFile - key: " + key);
+    long t0 = System.currentTimeMillis();
+    boolean r = client.doesObjectExist(bucketName, key);
+    System.err.println("    > took: " + (System.currentTimeMillis() - t0));
+    return r;
+  }
+
+  private InputStream getBlob(String key)
+  {
+    System.err.println("xcxc needs impl - getBlob - key: " + key);
+    try {
+      S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
+      System.err.println("          >> FOUND!!:");
+      return obj.getObjectContent();
+    }
+    catch (AmazonS3Exception e) {
+      if (e.getStatusCode() == 404) {
+        throw new CacheNotFoundException("File content cannot be found with key: " + key);
+
+      }
+      throw e;
+    }
+  }
+
+  private void putBlob(String key, byte[] blob)
+  {
+    System.err.println("xcxc - putBlob - key: " + key);
+    long t0 = System.currentTimeMillis();
+    client.putObject(new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
+    System.err.println("    > took: " + (System.currentTimeMillis() - t0));
   }
 
   @Override
   public void writeActionOutput(String key, Path execRoot)
       throws IOException, CacheNotFoundException {
     System.err.println("writeActionOutput - key: " + key + ", execRoot: " + execRoot);
-    byte[] data = cache.get(key);
+    InputStream data = getBlob(key);
     if (data == null) {
       throw new CacheNotFoundException("Action output cannot be found with key: " + key);
     }
@@ -141,7 +159,7 @@ public final class MemcacheActionCache implements RemoteActionCache {
       Path file = execRoot.getRelative(output.getExecPathString());
       addToActionOutput(file, output.getExecPathString(), actionOutput);
     }
-    cache.put(key, actionOutput.build().toByteArray());
+    putBlob(key, actionOutput.build().toByteArray());
   }
 
   @Override
@@ -152,7 +170,7 @@ public final class MemcacheActionCache implements RemoteActionCache {
     for (Path file : files) {
       addToActionOutput(file, file.relativeTo(execRoot).getPathString(), actionOutput);
     }
-    cache.put(key, actionOutput.build().toByteArray());
+    putBlob(key, actionOutput.build().toByteArray());
   }
 
   /**

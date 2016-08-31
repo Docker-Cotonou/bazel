@@ -85,6 +85,9 @@ public final class RemoteModule extends BlazeModule {
         }
       }
     }
+    else if (actionCache == null && options.s3CacheBucket != null) {
+      actionCache = new S3ActionCache(this.env.getDirectories().getExecRoot(), options);
+    }
   }
 
   @Override
