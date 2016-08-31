@@ -71,13 +71,13 @@ public final class MemcacheActionCache implements RemoteActionCache {
 
   @Override
   public String putFileIfNotExist(ActionInputFileCache cache, ActionInput input) throws IOException {
-    System.err.println("putFileIfNotExist - action input: " + file.toString());
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
     Path file = execRoot.getRelative(input.getExecPathString());
+    System.err.println("putFileIfNotExist - action input: " + file.toString());
     if (!file.exists()) return null;
-    String contentKey = HashCode.fromBytes(cache.getDigest(input)).toString();
+    String contentKey = new String(cache.getDigest(input).toByteArray());
     if (containsFile(contentKey)) {
       return contentKey;
     }
