@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.remote;
 
 import com.amazonaws.auth.EnvironmentVariableCredentialsProvider;
+import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.services.s3.model.*;
 import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -50,7 +51,7 @@ public final class S3ActionCache implements RemoteActionCache {
   private final String bucketName;
 
   // xcxc add retry wrappers ...
-  private final AmazonS3 client = new AmazonS3Client(new EnvironmentVariableCredentialsProvider());
+  private final AmazonS3 client = new AmazonS3Client(new DefaultAWSCredentialsProviderChain());
 
 
   /**
