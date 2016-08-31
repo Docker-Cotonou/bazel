@@ -67,8 +67,8 @@ public final class S3ActionCache implements RemoteActionCache {
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
-    if (!file.exists()) return null;
     System.err.println("putFileIfNotExist - file: " + file.toString());
+    if (!file.exists()) return null;
     String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
     if (containsFile(contentKey)) {
       return contentKey;
