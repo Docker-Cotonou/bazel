@@ -56,7 +56,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
 
   @Override
   public String putFileIfNotExist(Path file) throws IOException {
-    System.err.println("putFileIfNotExist - file: " + file.toString());
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
@@ -75,7 +74,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
     Path file = execRoot.getRelative(input.getExecPathString());
-    System.err.println("putFileIfNotExist - action input: " + file.toString());
     if (!file.exists()) return null;
     String contentKey = new String(cache.getDigest(input).toByteArray());
     if (containsFile(contentKey)) {
@@ -86,7 +84,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
   }
 
   private void putFile(String key, Path file) throws IOException {
-    System.err.println("putFile - key: " + key + ", file: " + file.toString());
     int fileSizeKBytes = (int) (file.getFileSize() / 1024);
     Preconditions.checkArgument(fileSizeKBytes < MAX_MEMORY_KBYTES);
     try {
@@ -111,7 +108,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
   @Override
   public void writeFile(String key, Path dest, boolean executable)
       throws IOException, CacheNotFoundException {
-    System.err.println("writeFile - key: " + key + ", dest: " + dest);
     byte[] data = cache.get(key);
     if (data == null) {
       throw new CacheNotFoundException("File content cannot be found with key: " + key);
@@ -129,7 +125,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
   @Override
   public void writeActionOutput(String key, Path execRoot)
       throws IOException, CacheNotFoundException {
-    System.err.println("writeActionOutput - key: " + key + ", execRoot: " + execRoot);
     byte[] data = cache.get(key);
     if (data == null) {
       throw new CacheNotFoundException("Action output cannot be found with key: " + key);
@@ -143,7 +138,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
   @Override
   public void putActionOutput(String key, Collection<? extends ActionInput> outputs)
       throws IOException {
-    System.err.println("writeActionOutput - key: " + key + ", bunch of outputs");
     CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
     for (ActionInput output : outputs) {
       Path file = execRoot.getRelative(output.getExecPathString());
@@ -155,7 +149,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
   @Override
   public void putActionOutput(String key, Path execRoot, Collection<Path> files)
       throws IOException {
-    System.err.println("writeActionOutput - key: " + key + ", execRoot : "+ execRoot +", bunch of outputs");
     CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
     for (Path file : files) {
       addToActionOutput(file, file.relativeTo(execRoot).getPathString(), actionOutput);
@@ -168,7 +161,6 @@ public final class MemcacheActionCache implements RemoteActionCache {
    */
   private void addToActionOutput(Path file, String execPathString, CacheEntry.Builder actionOutput)
       throws IOException {
-    System.err.println("addToActionOutput - file: " + file + ", execPathString : "+ execPathString);
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache

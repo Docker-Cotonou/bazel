@@ -22,6 +22,14 @@ import com.google.devtools.common.options.OptionsBase;
  */
 public final class RemoteOptions extends OptionsBase {
   @Option(
+    name = "remote_cache_debug",
+    defaultValue = "false",
+    category = "remote",
+    help = "Print remote caching debugging"
+  )
+  public boolean remoteCacheDebug;
+
+  @Option(
     name = "s3_remote_cache_bucket",
     defaultValue = "null",
     category = "remote",

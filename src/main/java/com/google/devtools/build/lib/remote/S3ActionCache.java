@@ -49,6 +49,7 @@ import java.util.concurrent.Semaphore;
 public final class S3ActionCache implements RemoteActionCache {
   private final Path execRoot;
   private final String bucketName;
+  private final boolean debug;
 
   // xcxc add retry wrappers ...
   private final AmazonS3 client = new AmazonS3Client(new DefaultAWSCredentialsProviderChain());
@@ -58,9 +59,9 @@ public final class S3ActionCache implements RemoteActionCache {
    * Construct an action cache using JCache API.
    */
   public S3ActionCache(Path execRoot, RemoteOptions options) {
-    System.err.println("CREATING S3ActionCache");
     this.execRoot = execRoot;
     this.bucketName = options.s3CacheBucket;
+    this.debug = options.remoteCacheDebug;
   }
 
   @Override
@@ -68,10 +69,9 @@ public final class S3ActionCache implements RemoteActionCache {
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
-    System.err.println("putFileIfNotExist - file: " + file.toString());
     if (!file.exists()) return null;
     String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
-    if (containsFile(contentKey)) {
+    if (containsFile(contentKey, file)) {
       return contentKey;
     }
     putFile(contentKey, file);
@@ -80,7 +80,6 @@ public final class S3ActionCache implements RemoteActionCache {
 
   @Override
   public String putFileIfNotExist(ActionInputFileCache cache, ActionInput input) throws IOException {
-    System.err.println("putFileIfNotExist - action input: " + input.toString());
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
@@ -88,7 +87,7 @@ public final class S3ActionCache implements RemoteActionCache {
     if (!file.exists()) return null;
     // PerActionFileCache already converted this to a lowercase ascii string.. it's not consistent!
     String contentKey = new String(cache.getDigest(input).toByteArray());
-    if (containsFile(contentKey)) {
+    if (containsFile(contentKey, file)) {
       return contentKey;
     }
     putFile(contentKey, file);
@@ -98,8 +97,7 @@ public final class S3ActionCache implements RemoteActionCache {
   @Override
   public void writeFile(String key, Path dest, boolean executable)
       throws IOException, CacheNotFoundException {
-    System.err.println("writeFile - key: " + key + ", dest: " + dest);
-    InputStream data = getBlob(key);
+    InputStream data = getBlob(key, dest);
     try (OutputStream stream = dest.getOutputStream()) {
       CacheEntry.parseFrom(data).getFileContent().writeTo(stream);
       dest.setExecutable(executable);
@@ -108,26 +106,29 @@ public final class S3ActionCache implements RemoteActionCache {
 
   private void putFile(String key, Path file) throws IOException {
     InputStream stream = file.getInputStream();
-    putBlob(key, CacheEntry.newBuilder().setFileContent(ByteString.readFrom(stream)).build().toByteArray());
+    putBlob(key, CacheEntry.newBuilder().setFileContent(ByteString.readFrom(stream)).build().toByteArray(), file);
   }
 
 
-  private boolean containsFile(String key) {
-    // xcxc asdf
-    System.err.println("rj xcxc containsFile - key: " + key);
+  private boolean containsFile(String key, Path file) {
     long t0 = System.currentTimeMillis();
     boolean r = client.doesObjectExist(bucketName, key);
-    System.err.println("    > took: " + (System.currentTimeMillis() - t0));
+    String found = r ? "Hit" : "Miss";
+      if (debug)
+        System.err.println("S3 Cache " + found + ": " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+
     return r;
   }
 
-  private InputStream getBlob(String key)
+  private InputStream getBlob(String key, Path path)
   {
-    System.err.println("xcxc needs impl - getBlob - key: " + key);
     try {
+      long t0 = System.currentTimeMillis();
       S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
-      System.err.println("          >> FOUND!!:");
-      return obj.getObjectContent();
+      InputStream stream = obj.getObjectContent();
+      if (debug)
+        System.err.println("S3 Cache Download: " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+      return stream;
     }
     catch (AmazonS3Exception e) {
       if (e.getStatusCode() == 404) {
@@ -138,19 +139,23 @@ public final class S3ActionCache implements RemoteActionCache {
     }
   }
 
-  private void putBlob(String key, byte[] blob)
+  private void putBlob(String key, byte[] blob, Path file)
   {
-    System.err.println("xcxc - putBlob - key: " + key);
     long t0 = System.currentTimeMillis();
     client.putObject(new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
-    System.err.println("    > took: " + (System.currentTimeMillis() - t0));
+    if (debug) {
+      if (file == null) {
+        System.err.println("S3 Cache Upload: (" + (System.currentTimeMillis() - t0) + "ms)");
+      } else {
+        System.err.println("S3 Cache Upload: " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+      }
+    }
   }
 
   @Override
   public void writeActionOutput(String key, Path execRoot)
       throws IOException, CacheNotFoundException {
-    System.err.println("writeActionOutput - key: " + key + ", execRoot: " + execRoot);
-    InputStream data = getBlob(key);
+    InputStream data = getBlob(key, execRoot);
     if (data == null) {
       throw new CacheNotFoundException("Action output cannot be found with key: " + key);
     }
@@ -163,24 +168,22 @@ public final class S3ActionCache implements RemoteActionCache {
   @Override
   public void putActionOutput(String key, Collection<? extends ActionInput> outputs)
       throws IOException {
-    System.err.println("writeActionOutput - key: " + key + ", bunch of outputs");
     CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
     for (ActionInput output : outputs) {
       Path file = execRoot.getRelative(output.getExecPathString());
       addToActionOutput(file, output.getExecPathString(), actionOutput);
     }
-    putBlob(key, actionOutput.build().toByteArray());
+    putBlob(key, actionOutput.build().toByteArray(), null);
   }
 
   @Override
   public void putActionOutput(String key, Path execRoot, Collection<Path> files)
       throws IOException {
-    System.err.println("writeActionOutput - key: " + key + ", execRoot : "+ execRoot +", bunch of outputs");
     CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
     for (Path file : files) {
       addToActionOutput(file, file.relativeTo(execRoot).getPathString(), actionOutput);
     }
-    putBlob(key, actionOutput.build().toByteArray());
+    putBlob(key, actionOutput.build().toByteArray(), null);
   }
 
   /**
@@ -188,7 +191,6 @@ public final class S3ActionCache implements RemoteActionCache {
    */
   private void addToActionOutput(Path file, String execPathString, CacheEntry.Builder actionOutput)
       throws IOException {
-    System.err.println("addToActionOutput - file: " + file + ", execPathString : "+ execPathString);
     // HACK https://github.com/bazelbuild/bazel/issues/1413
     // Test cacheStatus output is generated after execution
     // so it doesn't exist in time for us to store it in the remote cache
