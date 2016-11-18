@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.remote;
 
 import com.amazonaws.auth.EnvironmentVariableCredentialsProvider;
+import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.services.s3.model.*;
 import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionInput;
