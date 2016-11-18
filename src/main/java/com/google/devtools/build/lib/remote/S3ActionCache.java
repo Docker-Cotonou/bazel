@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.remote;
 
 import com.amazonaws.auth.EnvironmentVariableCredentialsProvider;
-import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.services.s3.model.*;
 import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -23,24 +22,17 @@ import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.RemoteProtocol.CacheEntry;
 import com.google.devtools.build.lib.remote.RemoteProtocol.FileEntry;
-import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 
-import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.internal.Constants;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Collection;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Semaphore;
 
 /**
  * xcxc
@@ -53,7 +45,6 @@ public final class S3ActionCache implements RemoteActionCache {
 
   // xcxc add retry wrappers ...
   private final AmazonS3 client = new AmazonS3Client(new DefaultAWSCredentialsProviderChain());
-
 
   /**
    * Construct an action cache using JCache API.
@@ -71,7 +62,7 @@ public final class S3ActionCache implements RemoteActionCache {
     // so it doesn't exist in time for us to store it in the remote cache
     if (!file.exists()) return null;
     String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
-    if (containsFile(contentKey, file)) {
+    if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
       return contentKey;
     }
     putFile(contentKey, file);
@@ -87,7 +78,7 @@ public final class S3ActionCache implements RemoteActionCache {
     if (!file.exists()) return null;
     // PerActionFileCache already converted this to a lowercase ascii string.. it's not consistent!
     String contentKey = new String(cache.getDigest(input).toByteArray());
-    if (containsFile(contentKey, file)) {
+    if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
       return contentKey;
     }
     putFile(contentKey, file);
@@ -105,12 +96,19 @@ public final class S3ActionCache implements RemoteActionCache {
   }
 
   private void putFile(String key, Path file) throws IOException {
-    InputStream stream = file.getInputStream();
-    putBlob(key, CacheEntry.newBuilder().setFileContent(ByteString.readFrom(stream)).build().toByteArray(), file);
+    try (InputStream stream = file.getInputStream()) {
+      putBlob(key, CacheEntry.newBuilder().setFileContent(ByteString.readFrom(stream)).build().toByteArray(), file);
+    }
   }
 
 
-  private boolean containsFile(String key, Path file) {
+  private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
+    if (isBlacklisted(file)) {
+      if (debug)
+        System.err.println("S3 BLACKLIST (contains file - mocking that it exists): " + file.toString());
+      return true;
+    }
+
     long t0 = System.currentTimeMillis();
     boolean r = client.doesObjectExist(bucketName, key);
     String found = r ? "Hit" : "Miss";
@@ -120,8 +118,26 @@ public final class S3ActionCache implements RemoteActionCache {
     return r;
   }
 
+  private boolean isBlacklisted(Path path) {
+    // path can be null, in which case we choose not to blacklist
+    if (path == null) {
+      return false;
+    }
+    String pathString = path.toString();
+    if (pathString.endsWith(".ts") && !pathString.endsWith(".d.ts")) {
+      return true;
+    }
+    return false;
+  }
+
   private InputStream getBlob(String key, Path path)
   {
+    if (isBlacklisted(path)) {
+      if (debug)
+        System.err.println("S3 BLACKLIST (fetch): " + path.toString());
+      throw new CacheNotFoundException("Blacklisted file pattern");
+    }
+
     try {
       long t0 = System.currentTimeMillis();
       S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
