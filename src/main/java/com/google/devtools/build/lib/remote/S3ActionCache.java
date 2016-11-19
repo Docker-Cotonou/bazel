@@ -105,8 +105,8 @@ public final class S3ActionCache implements RemoteActionCache {
 
   private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
     if (isBlacklisted(file)) {
-      if (debug)
-        System.err.println("S3 BLACKLIST (contains file - mocking that it exists): " + file.toString());
+//      if (debug)
+//        System.err.println("S3 BLACKLIST (contains file - mocking that it exists): " + file.toString());
       return true;
     }
 
@@ -114,7 +114,7 @@ public final class S3ActionCache implements RemoteActionCache {
     boolean r = client.doesObjectExist(bucketName, key);
     String found = r ? "Hit" : "Miss";
       if (debug)
-        System.err.println("S3 Cache " + found + ": " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+        System.err.println("S3 Cache " + found + ": " + file.toString() + "  key:"+ key +" (" + (System.currentTimeMillis() - t0) + "ms)");
 
     return r;
   }
@@ -139,16 +139,18 @@ public final class S3ActionCache implements RemoteActionCache {
       throw new CacheNotFoundException("Blacklisted file pattern");
     }
 
+    long t0 = System.currentTimeMillis();
     try {
-      long t0 = System.currentTimeMillis();
       S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
       InputStream stream = obj.getObjectContent();
       if (debug)
-        System.err.println("S3 Cache Download: " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+        System.err.println("S3 Cache Download: " + path.toString() + " key:"+ key +" (" + (System.currentTimeMillis() - t0) + "ms)");
       return stream;
     }
     catch (AmazonS3Exception e) {
       if (e.getStatusCode() == 404) {
+        if (debug)
+          System.err.println("S3 key not found key:"+ key +" " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
         throw new CacheNotFoundException("File content cannot be found with key: " + key);
 
       }
@@ -162,9 +164,9 @@ public final class S3ActionCache implements RemoteActionCache {
     client.putObject(new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
     if (debug) {
       if (file == null) {
-        System.err.println("S3 Cache Upload: (" + (System.currentTimeMillis() - t0) + "ms)");
+        System.err.println("S3 Cache Upload: key:"+ key +"  (" + (System.currentTimeMillis() - t0) + "ms)");
       } else {
-        System.err.println("S3 Cache Upload: " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+        System.err.println("S3 Cache Upload: key:"+ key +" " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
       }
     }
   }
@@ -178,6 +180,8 @@ public final class S3ActionCache implements RemoteActionCache {
     }
     CacheEntry cacheEntry = CacheEntry.parseFrom(data);
     for (FileEntry file : cacheEntry.getFilesList()) {
+      if (debug)
+        System.err.println("   >> Resoring file from cach entry: "+ file.getPath());
       writeFile(file.getContentKey(), execRoot.getRelative(file.getPath()), file.getExecutable());
     }
   }
@@ -188,6 +192,8 @@ public final class S3ActionCache implements RemoteActionCache {
     CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
     for (ActionInput output : outputs) {
       Path file = execRoot.getRelative(output.getExecPathString());
+      if (debug)
+        System.err.println("   >> Adding file to cache entry: "+ file.toString());
       addToActionOutput(file, output.getExecPathString(), actionOutput);
     }
     putBlob(key, actionOutput.build().toByteArray(), null);
@@ -198,6 +204,8 @@ public final class S3ActionCache implements RemoteActionCache {
       throws IOException {
     CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
     for (Path file : files) {
+      if (debug)
+        System.err.println("   >> Adding file to cache entry: "+ file.toString());
       addToActionOutput(file, file.relativeTo(execRoot).getPathString(), actionOutput);
     }
     putBlob(key, actionOutput.build().toByteArray(), null);
