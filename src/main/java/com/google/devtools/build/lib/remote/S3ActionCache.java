@@ -105,8 +105,6 @@ public final class S3ActionCache implements RemoteActionCache {
 
   private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
     if (isBlacklisted(file)) {
-//      if (debug)
-//        System.err.println("S3 BLACKLIST (contains file - mocking that it exists): " + file.toString());
       return true;
     }
 

@@ -107,14 +107,14 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     // Either I put information about the system tools in the hash or assume tools are always
     // checked in.
     Preconditions.checkNotNull(actionMetadata.getKey());
-    System.err.println("Adding to hasher (actionMetadata.getKey): "+ actionMetadata.getKey());
+    //System.err.println("Adding to hasher (actionMetadata.getKey): "+ actionMetadata.getKey());
     hasher.putString(actionMetadata.getKey(), Charset.defaultCharset());
 
 
     List<ActionInput> inputs = new ArrayList<>();
     for (ActionInput input : spawn.getInputFiles()) {
       inputs.add(input);
-      System.err.println("Adding to hasher (input.getExecPathString): "+ input.getExecPathString());
+      //System.err.println("Adding to hasher (input.getExecPathString): "+ input.getExecPathString());
       hasher.putString(input.getExecPathString(), Charset.defaultCharset());
 
       // xcxc rj
@@ -126,7 +126,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         // changes. It might not be sufficient to identify the input file globally in the
         // remote action cache. Consider upgrading this to a better hash algorithm with
         // less collision.
-        System.err.println("Adding to hasher (inputFileCache.getDigest): "+ inputFileCache.getDigest(input).toString(Charset.defaultCharset()));
+        //System.err.println("Adding to hasher (inputFileCache.getDigest): "+ inputFileCache.getDigest(input).toString(Charset.defaultCharset()));
         hasher.putBytes(inputFileCache.getDigest(input).toByteArray());
       } catch (IOException e) {
         throw new UserExecException("Failed to get digest for input.", e);
