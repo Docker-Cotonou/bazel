@@ -117,10 +117,6 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       //System.err.println("Adding to hasher (input.getExecPathString): "+ input.getExecPathString());
       hasher.putString(input.getExecPathString(), Charset.defaultCharset());
 
-      // xcxc rj
-      Path file = execRoot.getRelative(input.getExecPathString());
-      if (!file.exists()) continue;
-
       try {
         // TODO(alpha): The digest from ActionInputFileCache is used to detect local file
         // changes. It might not be sufficient to identify the input file globally in the
