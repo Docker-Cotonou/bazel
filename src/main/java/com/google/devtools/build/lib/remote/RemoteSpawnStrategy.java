@@ -111,7 +111,9 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     hasher.putString(actionMetadata.getKey(), Charset.defaultCharset());
 
 
-    List<ActionInput> inputs = new ArrayList<>();
+    List<ActionInput> inputs = ActionInputHelper.expandArtifacts(spawn.getInputFiles(),
+                                  actionExecutionContext.getArtifactExpander());
+    List<ActionInput> inputsStrict = new ArrayList<>();
     for (ActionInput input : spawn.getInputFiles()) {
       inputs.add(input);
       //System.err.println("Adding to hasher (input.getExecPathString): "+ input.getExecPathString());
