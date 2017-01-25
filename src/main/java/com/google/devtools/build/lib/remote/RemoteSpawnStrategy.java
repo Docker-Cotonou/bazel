@@ -127,7 +127,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         //System.err.println("Adding to hasher (inputFileCache.getDigest): "+ inputFileCache.getDigest(input).toString(Charset.defaultCharset()));
         hasher.putBytes(inputFileCache.getDigest(input).toByteArray());
       } catch (IOException e) {
-        throw new UserExecException("Failed to get digest for input.", e);
+        //throw new UserExecException("Failed to get digest for input.", e);
       }
     }
 
