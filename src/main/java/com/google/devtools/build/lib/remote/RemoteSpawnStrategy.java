@@ -177,6 +177,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
           actionCache = new ConcurrentMapActionCache(ConcurrentMapFactory.create(options));
         } else if (GrpcActionCache.isRemoteCacheOptions(options)) {
           actionCache = new GrpcActionCache(options);
+        } else if (options.s3CacheBucket != null) {
+          actionCache = new S3ActionCache(options);
         }
         // Otherwise actionCache remains null and remote caching/execution are disabled.
 

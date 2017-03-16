@@ -31,6 +31,11 @@ import java.util.concurrent.Semaphore;
  * Created by tylernisonoff on 3/16/17.
  */
 public class S3ActionCache implements RemoteActionCache {
+    private S3ActionCache2 cache;
+
+    S3ActionCache(RemoteOptions options) {
+        this.cache = new S3ActionCache2(options);
+    }
 
     @Override
     public void uploadTree(TreeNodeRepository repository, Path execRoot, TreeNode root)
@@ -122,12 +127,30 @@ public class S3ActionCache implements RemoteActionCache {
 
     @Override
     public ContentDigest uploadBlob(byte[] blob) throws InterruptedException {
-        return null;
+        int blobSizeKBytes = blob.length / 1024;
+        Preconditions.checkArgument(blobSizeKBytes < MAX_MEMORY_KBYTES);
+        ContentDigest digest = ContentDigests.computeDigest(blob);
+        uploadMemoryAvailable.acquire(blobSizeKBytes);
+        try {
+            cache.put(ContentDigests.toHexString(digest), blob);
+        } finally {
+            uploadMemoryAvailable.release(blobSizeKBytes);
+        }
+        return digest;
     }
 
     @Override
     public byte[] downloadBlob(ContentDigest digest) throws CacheNotFoundException {
-        return new byte[0];
+        if (digest.getSizeBytes() == 0) {
+            return new byte[0];
+        }
+        // This unconditionally downloads the whole blob into memory!
+        Preconditions.checkArgument((int) (digest.getSizeBytes() / 1024) < MAX_MEMORY_KBYTES);
+        byte[] data = cache.get(ContentDigests.toHexString(digest));
+        if (data == null) {
+            throw new CacheNotFoundException(digest);
+        }
+        return data;
     }
 
     @Override
@@ -140,13 +163,25 @@ public class S3ActionCache implements RemoteActionCache {
         return ImmutableList.copyOf(blobs);
     }
 
+    public boolean containsKey(ContentDigest digest) {
+        return cache.containsKey(ContentDigests.toHexString(digest));
+    }
+
     @Override
     public ActionResult getCachedActionResult(ContentDigests.ActionKey actionKey) {
-        return null;
+        byte[] data = cache.get(ContentDigests.toHexString(actionKey.getDigest()));
+        if (data == null) {
+            return null;
+        }
+        try {
+            return ActionResult.parseFrom(data);
+        } catch (InvalidProtocolBufferException e) {
+            return null;
+        }
     }
 
     @Override
     public void setCachedActionResult(ContentDigests.ActionKey actionKey, ActionResult result) throws InterruptedException {
-
+        cache.put(ContentDigests.toHexString(actionKey.getDigest()), result.toByteArray());
     }
 }
