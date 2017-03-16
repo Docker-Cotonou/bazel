@@ -128,12 +128,12 @@ java_import(
 
 java_import(
     name = "apache_httpclient",
-    jars = ["apache_httpclient/httpclient-4.2.5.jar"],
+    jars = ["apache_httpclient/httpclient-4.5.2.jar"],
 )
 
 java_import(
     name = "apache_httpcore",
-    jars = ["apache_httpcore/httpcore-4.2.4.jar"],
+    jars = ["apache_httpcore/httpcore-4.4.4.jar"],
 )
 
 java_import(
@@ -246,6 +246,19 @@ java_import(
 filegroup(
     name = "auto_value-jars",
     srcs = ["auto/auto-value-1.2.jar"],
+)
+
+java_import(
+    name = "aws",
+    jars = [
+        "aws/aws-java-sdk-core-1.11.29.jar",
+        "aws/aws-java-sdk-kms-1.11.29.jar",
+        "aws/aws-java-sdk-s3-1.11.29.jar",
+        "aws/jmespath-java-1.0.jar",
+        "aws/jackson-annotations-2.6.0.jar",
+        "aws/jackson-core-2.6.6.jar",
+        "aws/jackson-databind-2.6.6.jar"
+    ],
 )
 
 java_library(
