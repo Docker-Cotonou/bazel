@@ -92,22 +92,31 @@ public class S3ActionCache implements RemoteActionCache {
             // First put the file content to cache.
             ContentDigest digest = uploadFileContents(file);
             // Add to protobuf.
-            result
-                    .addOutputBuilder()
-                    .setPath(file.relativeTo(execRoot).getPathString())
-                    .getFileMetadataBuilder()
-                    .setDigest(digest)
-                    .setExecutable(file.isExecutable());
+            // ##TestHack
+            if (digest != null) {
+                result
+                        .addOutputBuilder()
+                        .setPath(file.relativeTo(execRoot).getPathString())
+                        .getFileMetadataBuilder()
+                        .setDigest(digest)
+                        .setExecutable(file.isExecutable());
+            }
         }
     }
 
     @Override
     public ContentDigest uploadFileContents(Path file) throws IOException, InterruptedException {
         // This unconditionally reads the whole file into memory first!
-        if(isBlacklisted(file)) {
-            return ContentDigests.computeDigest(ByteString.readFrom(file.getInputStream()).toByteArray());
+        if(!file.exists()) {
+            // #TestHack -- bazel tries to upload results before they exist. Uncomment below when debug logging is added here
+            //System.err.println("Does not exist: " + file);
+            return null;
         }
-        return uploadBlob(ByteString.readFrom(file.getInputStream()).toByteArray());
+        ContentDigest digest = ContentDigests.computeDigest(file);
+        if(isBlacklisted(file)) {
+            cache.putFile(ContentDigests.toHexString(digest), file);
+        }
+        return digest;
     }
 
     @Override
@@ -117,13 +126,10 @@ public class S3ActionCache implements RemoteActionCache {
         if(isBlacklisted(dest)) {
             throw new CacheNotFoundException(digest);
         }
-        byte[] contents = downloadBlob(digest);
+        FileSystemUtils.createDirectoryAndParents(dest.getParentDirectory());
+        Path getPath = cache.getFile(ContentDigests.toHexString(digest), dest);
         if (debug)
             System.err.println("  " + dest);
-        FileSystemUtils.createDirectoryAndParents(dest.getParentDirectory());
-        try (OutputStream stream = dest.getOutputStream()) {
-            stream.write(contents);
-        }
         dest.setExecutable(executable);
     }
 

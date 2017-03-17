@@ -30,7 +30,11 @@ import com.google.protobuf.ByteString;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.util.Collection;
 
 /**
@@ -124,6 +128,43 @@ public final class S3ActionCache2 {
     }
 
 
+    public Path getFile(String key, Path dest) {
+
+        long t0 = System.currentTimeMillis();
+        try {
+            S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
+            InputStream reader = new BufferedInputStream(
+                    obj.getObjectContent());
+            OutputStream writer = new BufferedOutputStream(new FileOutputStream(dest.getPathFile()));
+
+            int read = -1;
+
+            while ( ( read = reader.read() ) != -1 ) {
+                writer.write(read);
+            }
+
+            writer.flush();
+            writer.close();
+            reader.close();
+            if (debug)
+                System.err.println("S3 Cache Download: " + " key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
+            return dest;
+        } catch (AmazonS3Exception e) {
+            if (e.getStatusCode() == 404) {
+                if (debug)
+                    System.err.println("S3 key not found key:" + key + " " + " (" + (System.currentTimeMillis() - t0) + "ms)");
+                return null;
+            }
+            throw e;
+        } catch (IOException e) {
+            // Tyler not sure if we should return null or raise exception
+            if (debug)
+                System.err.println("IO Exception downloading key" + key);
+            return null;
+        }
+
+    }
+
     public byte[] get(String key) {
 //        if (isBlacklisted(path)) {
 //            if (debug)
@@ -165,6 +206,14 @@ public final class S3ActionCache2 {
 
     public boolean containsKey(String key) {
         return client.doesObjectExist(bucketName, key);
+    }
+
+    public void putFile(String key, Path file) {
+        long t0 = System.currentTimeMillis();
+        client.putObject(new PutObjectRequest(bucketName, key, file.getPathFile()));
+        if (debug) {
+            System.err.println("S3 Cache Upload: key:" + key + "  (" + (System.currentTimeMillis() - t0) + "ms)");
+        }
     }
 
     public void put(String key, byte[] blob) {
