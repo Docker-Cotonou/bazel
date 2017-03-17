@@ -30,7 +30,7 @@ import com.google.protobuf.ByteString;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.Collection;
 
 /**
@@ -52,35 +52,33 @@ public final class S3ActionCache2 {
         this.debug = options.remoteCacheDebug;
     }
 
-    @Override
-    public String putFileIfNotExist(Path file) throws IOException {
-        // HACK https://github.com/bazelbuild/bazel/issues/1413
-        // Test cacheStatus output is generated after execution
-        // so it doesn't exist in time for us to store it in the remote cache
-        if (!file.exists()) return null;
-        String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
-        if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
-            return contentKey;
-        }
-        putFile(contentKey, file);
-        return contentKey;
-    }
-
-    @Override
-    public String putFileIfNotExist(ActionInputFileCache cache, ActionInput input, Path execRoot) throws IOException {
-        // HACK https://github.com/bazelbuild/bazel/issues/1413
-        // Test cacheStatus output is generated after execution
-        // so it doesn't exist in time for us to store it in the remote cache
-        Path file = execRoot.getRelative(input.getExecPathString());
-        if (!file.exists()) return null;
-        // PerActionFileCache already converted this to a lowercase ascii string.. it's not consistent!
-        String contentKey = new String(cache.getDigest(input).toByteArray());
-        if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
-            return contentKey;
-        }
-        putFile(contentKey, file);
-        return contentKey;
-    }
+//    public String putFileIfNotExist(Path file) throws IOException {
+//        // HACK https://github.com/bazelbuild/bazel/issues/1413
+//        // Test cacheStatus output is generated after execution
+//        // so it doesn't exist in time for us to store it in the remote cache
+//        if (!file.exists()) return null;
+//        String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
+//        if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
+//            return contentKey;
+//        }
+//        putFile(contentKey, file);
+//        return contentKey;
+//    }
+//
+//    public String putFileIfNotExist(ActionInputFileCache cache, ActionInput input, Path execRoot) throws IOException {
+//        // HACK https://github.com/bazelbuild/bazel/issues/1413
+//        // Test cacheStatus output is generated after execution
+//        // so it doesn't exist in time for us to store it in the remote cache
+//        Path file = execRoot.getRelative(input.getExecPathString());
+//        if (!file.exists()) return null;
+//        // PerActionFileCache already converted this to a lowercase ascii string.. it's not consistent!
+//        String contentKey = new String(cache.getDigest(input).toByteArray());
+//        if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
+//            return contentKey;
+//        }
+//        putFile(contentKey, file);
+//        return contentKey;
+//    }
 
 //    @Override
 //    public void writeFile(String key, Path dest, boolean executable)
@@ -99,19 +97,19 @@ public final class S3ActionCache2 {
 //    }
 
 
-    private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
-        if (isBlacklisted(file)) {
-            return true;
-        }
-
-        long t0 = System.currentTimeMillis();
-        boolean r = client.doesObjectExist(bucketName, key);
-        String found = r ? "Hit" : "Miss";
-        if (debug)
-            System.err.println("S3 Cache " + found + ": " + file.toString() + "  key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
-
-        return r;
-    }
+//    private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
+//        if (isBlacklisted(file)) {
+//            return true;
+//        }
+//
+//        long t0 = System.currentTimeMillis();
+//        boolean r = client.doesObjectExist(bucketName, key);
+//        String found = r ? "Hit" : "Miss";
+//        if (debug)
+//            System.err.println("S3 Cache " + found + ": " + file.toString() + "  key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
+//
+//        return r;
+//    }
 
     private boolean isBlacklisted(Path path) {
         // path can be null, in which case we choose not to blacklist
@@ -125,44 +123,42 @@ public final class S3ActionCache2 {
         return false;
     }
 
+
     public byte[] get(String key) {
-        InputStream stream = getBlob(key, null);
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-
-        int nRead;
-        byte[] data = new byte[16384];
-
-        while ((nRead = is.read(data, 0, data.length)) != -1) {
-            buffer.write(data, 0, nRead);
-        }
-
-        buffer.flush();
-
-        return buffer.toByteArray();
-    }
-
-    private InputStream getBlob(String key, Path path) {
-        if (isBlacklisted(path)) {
-            if (debug)
-                System.err.println("S3 BLACKLIST (fetch): " + path.toString());
-            throw new CacheNotFoundException("Blacklisted file pattern");
-        }
+//        if (isBlacklisted(path)) {
+//            if (debug)
+//                System.err.println("S3 BLACKLIST (fetch): " + path.toString());
+//            throw new CacheNotFoundException("Blacklisted file pattern");
+//        }
 
         long t0 = System.currentTimeMillis();
         try {
             S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
             InputStream stream = obj.getObjectContent();
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            int nRead;
+            byte[] data = new byte[16384];
+
+            while ((nRead = stream.read(data, 0, data.length)) != -1) {
+                buffer.write(data, 0, nRead);
+            }
+
             if (debug)
-                System.err.println("S3 Cache Download: " + path.toString() + " key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
-            return stream;
+                System.err.println("S3 Cache Download: " + " key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
+            return buffer.toByteArray();
         } catch (AmazonS3Exception e) {
             if (e.getStatusCode() == 404) {
                 if (debug)
-                    System.err.println("S3 key not found key:" + key + " " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
-                throw new CacheNotFoundException("File content cannot be found with key: " + key);
+                    System.err.println("S3 key not found key:" + key + " " + " (" + (System.currentTimeMillis() - t0) + "ms)");
 
+                return null;
             }
             throw e;
+        } catch (IOException e) {
+            // Tyler not sure if we should return null or raise exception
+            if (debug)
+                System.err.println("IO Exception downloading key" + key);
+            return null;
         }
     }
 

@@ -127,15 +127,8 @@ public class S3ActionCache implements RemoteActionCache {
 
     @Override
     public ContentDigest uploadBlob(byte[] blob) throws InterruptedException {
-        int blobSizeKBytes = blob.length / 1024;
-        Preconditions.checkArgument(blobSizeKBytes < MAX_MEMORY_KBYTES);
         ContentDigest digest = ContentDigests.computeDigest(blob);
-        uploadMemoryAvailable.acquire(blobSizeKBytes);
-        try {
-            cache.put(ContentDigests.toHexString(digest), blob);
-        } finally {
-            uploadMemoryAvailable.release(blobSizeKBytes);
-        }
+        cache.put(ContentDigests.toHexString(digest), blob);
         return digest;
     }
 
@@ -145,7 +138,6 @@ public class S3ActionCache implements RemoteActionCache {
             return new byte[0];
         }
         // This unconditionally downloads the whole blob into memory!
-        Preconditions.checkArgument((int) (digest.getSizeBytes() / 1024) < MAX_MEMORY_KBYTES);
         byte[] data = cache.get(ContentDigests.toHexString(digest));
         if (data == null) {
             throw new CacheNotFoundException(digest);
