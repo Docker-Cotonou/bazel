@@ -32,9 +32,11 @@ import java.util.concurrent.Semaphore;
  */
 public class S3ActionCache implements RemoteActionCache {
     private S3ActionCache2 cache;
+    private final boolean debug;
 
     S3ActionCache(RemoteOptions options) {
         this.cache = new S3ActionCache2(options);
+        this.debug = options.remoteCacheDebug;
     }
 
     @Override
@@ -53,6 +55,8 @@ public class S3ActionCache implements RemoteActionCache {
     public void downloadTree(ContentDigest rootDigest, Path rootLocation)
             throws IOException, CacheNotFoundException {
         FileNode fileNode = FileNode.parseFrom(downloadBlob(rootDigest));
+        if (debug)
+            System.err.println("  " + rootLocation);
         if (fileNode.hasFileMetadata()) {
             FileMetadata meta = fileNode.getFileMetadata();
             downloadFileContents(meta.getDigest(), rootLocation, meta.getExecutable());
@@ -114,6 +118,8 @@ public class S3ActionCache implements RemoteActionCache {
             throw new CacheNotFoundException(digest);
         }
         byte[] contents = downloadBlob(digest);
+        if (debug)
+            System.err.println("  " + dest);
         FileSystemUtils.createDirectoryAndParents(dest.getParentDirectory());
         try (OutputStream stream = dest.getOutputStream()) {
             stream.write(contents);

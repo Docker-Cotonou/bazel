@@ -142,6 +142,7 @@ public final class S3ActionCache2 {
             while ((nRead = stream.read(data, 0, data.length)) != -1) {
                 buffer.write(data, 0, nRead);
             }
+            buffer.flush();
 
             if (debug)
                 System.err.println("S3 Cache Download: " + " key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
