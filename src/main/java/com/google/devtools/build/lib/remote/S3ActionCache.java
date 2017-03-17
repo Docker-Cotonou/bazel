@@ -88,18 +88,26 @@ public class S3ActionCache implements RemoteActionCache {
             // First put the file content to cache.
             ContentDigest digest = uploadFileContents(file);
             // Add to protobuf.
-            result
-                    .addOutputBuilder()
-                    .setPath(file.relativeTo(execRoot).getPathString())
-                    .getFileMetadataBuilder()
-                    .setDigest(digest)
-                    .setExecutable(file.isExecutable());
+            // ##TestHack
+            if (digest != null) {
+                result
+                        .addOutputBuilder()
+                        .setPath(file.relativeTo(execRoot).getPathString())
+                        .getFileMetadataBuilder()
+                        .setDigest(digest)
+                        .setExecutable(file.isExecutable());
+            }
         }
     }
 
     @Override
     public ContentDigest uploadFileContents(Path file) throws IOException, InterruptedException {
         // This unconditionally reads the whole file into memory first!
+        if(!file.exists()) {
+            // #TestHack -- bazel tries to upload results before they exist. Uncomment below when debug logging is added here
+            //System.err.println("Does not exist: " + file);
+            return null;
+        }
         if(isBlacklisted(file)) {
             return ContentDigests.computeDigest(ByteString.readFrom(file.getInputStream()).toByteArray());
         }
