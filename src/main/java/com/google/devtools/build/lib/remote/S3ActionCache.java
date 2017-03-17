@@ -108,10 +108,11 @@ public class S3ActionCache implements RemoteActionCache {
             //System.err.println("Does not exist: " + file);
             return null;
         }
+        ContentDigest digest = ContentDigests.computeDigest(file);
         if(isBlacklisted(file)) {
-            return ContentDigests.computeDigest(ByteString.readFrom(file.getInputStream()).toByteArray());
+            cache.putFile(ContentDigests.toHexString(digest), file);
         }
-        return uploadBlob(ByteString.readFrom(file.getInputStream()).toByteArray());
+        return digest;
     }
 
     @Override
@@ -121,11 +122,8 @@ public class S3ActionCache implements RemoteActionCache {
         if(isBlacklisted(dest)) {
             throw new CacheNotFoundException(digest);
         }
-        byte[] contents = downloadBlob(digest);
         FileSystemUtils.createDirectoryAndParents(dest.getParentDirectory());
-        try (OutputStream stream = dest.getOutputStream()) {
-            stream.write(contents);
-        }
+        Path getPath = cache.getFile(ContentDigests.toHexString(digest), dest);
         dest.setExecutable(executable);
     }
 
