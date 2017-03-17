@@ -100,6 +100,9 @@ public class S3ActionCache implements RemoteActionCache {
     @Override
     public ContentDigest uploadFileContents(Path file) throws IOException, InterruptedException {
         // This unconditionally reads the whole file into memory first!
+        if(isBlacklisted(file)) {
+            return ContentDigests.computeDigest(ByteString.readFrom(file.getInputStream()).toByteArray());
+        }
         return uploadBlob(ByteString.readFrom(file.getInputStream()).toByteArray());
     }
 
@@ -107,6 +110,9 @@ public class S3ActionCache implements RemoteActionCache {
     public void downloadFileContents(ContentDigest digest, Path dest, boolean executable)
             throws IOException, CacheNotFoundException {
         // This unconditionally downloads the whole file into memory first!
+        if(isBlacklisted(dest)) {
+            throw new CacheNotFoundException(digest);
+        }
         byte[] contents = downloadBlob(digest);
         FileSystemUtils.createDirectoryAndParents(dest.getParentDirectory());
         try (OutputStream stream = dest.getOutputStream()) {
@@ -175,5 +181,17 @@ public class S3ActionCache implements RemoteActionCache {
     @Override
     public void setCachedActionResult(ContentDigests.ActionKey actionKey, ActionResult result) throws InterruptedException {
         cache.put(ContentDigests.toHexString(actionKey.getDigest()), result.toByteArray());
+    }
+
+    private boolean isBlacklisted(Path path) {
+        // path can be null, in which case we choose not to blacklist
+        if (path == null) {
+            return false;
+        }
+        String pathString = path.toString();
+        if (pathString.endsWith(".ts") && !pathString.endsWith(".d.ts")) {
+            return true;
+        }
+        return false;
     }
 }
