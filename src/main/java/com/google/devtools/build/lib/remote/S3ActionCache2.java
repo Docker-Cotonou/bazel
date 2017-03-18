@@ -23,6 +23,7 @@ import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 //import com.google.devtools.build.lib.remote.RemoteProtocol.CacheEntry;
+import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 //import com.google.devtools.build.lib.remote.RemoteProtocol.FileEntry;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
@@ -128,24 +129,15 @@ public final class S3ActionCache2 {
     }
 
 
-    public Path getFile(String key, Path dest) {
+    public Path getFile(String key, Path dest, ContentDigest digest) throws CacheNotFoundException {
 
         long t0 = System.currentTimeMillis();
         try {
-            S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
-            InputStream reader = new BufferedInputStream(
-                    obj.getObjectContent());
-            OutputStream writer = new BufferedOutputStream(new FileOutputStream(dest.getPathFile()));
-
-            int read = -1;
-
-            while ( ( read = reader.read() ) != -1 ) {
-                writer.write(read);
+            if (debug) {
+                System.err.println("Attempting to download key " + key + " for dest " + dest);
             }
 
-            writer.flush();
-            writer.close();
-            reader.close();
+            client.getObject(new GetObjectRequest(bucketName, key), dest.getPathFile());
             if (debug)
                 System.err.println("S3 Cache Download: " + " key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
             return dest;
@@ -153,16 +145,15 @@ public final class S3ActionCache2 {
             if (e.getStatusCode() == 404) {
                 if (debug)
                     System.err.println("S3 key not found key:" + key + " " + " (" + (System.currentTimeMillis() - t0) + "ms)");
-                return null;
+                throw new CacheNotFoundException(digest);
             }
             throw e;
-        } catch (IOException e) {
-            // Tyler not sure if we should return null or raise exception
-            if (debug)
-                System.err.println("IO Exception downloading key" + key);
-            return null;
+        } catch (Exception e) {
+            if (debug) {
+                System.err.println("ERROR: Downloading " + dest + " " + key);
+            }
+            throw e;
         }
-
     }
 
     public byte[] get(String key) {

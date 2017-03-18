@@ -127,7 +127,7 @@ public class S3ActionCache implements RemoteActionCache {
             throw new CacheNotFoundException(digest);
         }
         FileSystemUtils.createDirectoryAndParents(dest.getParentDirectory());
-        Path getPath = cache.getFile(ContentDigests.toHexString(digest), dest);
+        Path getPath = cache.getFile(ContentDigests.toHexString(digest), dest, digest);
         if (debug)
             System.err.println("  " + dest);
         dest.setExecutable(executable);
@@ -202,6 +202,9 @@ public class S3ActionCache implements RemoteActionCache {
         }
         String pathString = path.toString();
         if (pathString.endsWith(".ts") && !pathString.endsWith(".d.ts")) {
+            return true;
+        }
+        if (pathString.endsWith(".tar")) {
             return true;
         }
         return false;
