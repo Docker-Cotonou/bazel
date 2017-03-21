@@ -22,9 +22,7 @@ import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-//import com.google.devtools.build.lib.remote.RemoteProtocol.CacheEntry;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
-//import com.google.devtools.build.lib.remote.RemoteProtocol.FileEntry;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 
@@ -57,80 +55,7 @@ public final class S3ActionCache2 {
         this.debug = options.remoteCacheDebug;
     }
 
-//    public String putFileIfNotExist(Path file) throws IOException {
-//        // HACK https://github.com/bazelbuild/bazel/issues/1413
-//        // Test cacheStatus output is generated after execution
-//        // so it doesn't exist in time for us to store it in the remote cache
-//        if (!file.exists()) return null;
-//        String contentKey = HashCode.fromBytes(file.getMD5Digest()).toString();
-//        if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
-//            return contentKey;
-//        }
-//        putFile(contentKey, file);
-//        return contentKey;
-//    }
-//
-//    public String putFileIfNotExist(ActionInputFileCache cache, ActionInput input, Path execRoot) throws IOException {
-//        // HACK https://github.com/bazelbuild/bazel/issues/1413
-//        // Test cacheStatus output is generated after execution
-//        // so it doesn't exist in time for us to store it in the remote cache
-//        Path file = execRoot.getRelative(input.getExecPathString());
-//        if (!file.exists()) return null;
-//        // PerActionFileCache already converted this to a lowercase ascii string.. it's not consistent!
-//        String contentKey = new String(cache.getDigest(input).toByteArray());
-//        if (fileAlreadyExistsOrBlacklisted(contentKey, file)) {
-//            return contentKey;
-//        }
-//        putFile(contentKey, file);
-//        return contentKey;
-//    }
-
-//    @Override
-//    public void writeFile(String key, Path dest, boolean executable)
-//            throws IOException, CacheNotFoundException {
-//        InputStream data = getBlob(key, dest);
-//        try (OutputStream stream = dest.getOutputStream()) {
-//            CacheEntry.parseFrom(data).getFileContent().writeTo(stream);
-//            dest.setExecutable(executable);
-//        }
-//    }
-//
-//    private void putFile(String key, Path file) throws IOException {
-//        try (InputStream stream = file.getInputStream()) {
-//            putBlob(key, CacheEntry.newBuilder().setFileContent(ByteString.readFrom(stream)).build().toByteArray(), file);
-//        }
-//    }
-
-
-//    private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
-//        if (isBlacklisted(file)) {
-//            return true;
-//        }
-//
-//        long t0 = System.currentTimeMillis();
-//        boolean r = client.doesObjectExist(bucketName, key);
-//        String found = r ? "Hit" : "Miss";
-//        if (debug)
-//            System.err.println("S3 Cache " + found + ": " + file.toString() + "  key:" + key + " (" + (System.currentTimeMillis() - t0) + "ms)");
-//
-//        return r;
-//    }
-
-    private boolean isBlacklisted(Path path) {
-        // path can be null, in which case we choose not to blacklist
-        if (path == null) {
-            return false;
-        }
-        String pathString = path.toString();
-        if (pathString.endsWith(".ts") && !pathString.endsWith(".d.ts")) {
-            return true;
-        }
-        return false;
-    }
-
-
     public Path getFile(String key, Path dest, ContentDigest digest) throws CacheNotFoundException {
-
         long t0 = System.currentTimeMillis();
         try {
             if (debug) {
@@ -157,12 +82,6 @@ public final class S3ActionCache2 {
     }
 
     public byte[] get(String key) {
-//        if (isBlacklisted(path)) {
-//            if (debug)
-//                System.err.println("S3 BLACKLIST (fetch): " + path.toString());
-//            throw new CacheNotFoundException("Blacklisted file pattern");
-//        }
-
         long t0 = System.currentTimeMillis();
         try {
             S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
@@ -215,67 +134,4 @@ public final class S3ActionCache2 {
             System.err.println("S3 Cache Upload: key:" + key + "  (" + (System.currentTimeMillis() - t0) + "ms)");
         }
     }
-
-//    @Override
-//    public void writeActionOutput(String key, Path execRoot)
-//            throws IOException, CacheNotFoundException {
-//        InputStream data = getBlob(key, execRoot);
-//        if (data == null) {
-//            throw new CacheNotFoundException("Action output cannot be found with key: " + key);
-//        }
-//        CacheEntry cacheEntry = CacheEntry.parseFrom(data);
-//        for (FileEntry file : cacheEntry.getFilesList()) {
-//            if (debug)
-//                System.err.println("   >> Resoring file from cach entry: " + file.getPath());
-//            writeFile(file.getContentKey(), execRoot.getRelative(file.getPath()), file.getExecutable());
-//        }
-//    }
-//
-//    @Override
-//    public void putActionOutput(String key, Collection<? extends ActionInput> outputs, Path execRoot)
-//            throws IOException {
-//        CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
-//        for (ActionInput output : outputs) {
-//            Path file = execRoot.getRelative(output.getExecPathString());
-//            if (debug)
-//                System.err.println("   >> Adding file to cache entry: " + file.toString());
-//            addToActionOutput(file, output.getExecPathString(), actionOutput);
-//        }
-//        putBlob(key, actionOutput.build().toByteArray(), null);
-//    }
-//
-//    @Override
-//    public void putActionOutput(String key, Path execRoot, Collection<Path> files)
-//            throws IOException {
-//        CacheEntry.Builder actionOutput = CacheEntry.newBuilder();
-//        for (Path file : files) {
-//            if (debug)
-//                System.err.println("   >> Adding file to cache entry: " + file.toString());
-//            addToActionOutput(file, file.relativeTo(execRoot).getPathString(), actionOutput);
-//        }
-//        putBlob(key, actionOutput.build().toByteArray(), null);
-//    }
-//
-//    /**
-//     * Add the file to action output cache entry. Put the file to cache if necessary.
-//     */
-//    private void addToActionOutput(Path file, String execPathString, CacheEntry.Builder actionOutput)
-//            throws IOException {
-//        // HACK https://github.com/bazelbuild/bazel/issues/1413
-//        // Test cacheStatus output is generated after execution
-//        // so it doesn't exist in time for us to store it in the remote cache
-//        if (!file.exists()) return;
-//        if (file.isDirectory()) {
-//            // TODO(alpha): Implement this for directory.
-//            throw new UnsupportedOperationException("Storing a directory is not yet supported.");
-//        }
-//        // First put the file content to cache.
-//        String contentKey = putFileIfNotExist(file);
-//        // Add to protobuf.
-//        actionOutput
-//                .addFilesBuilder()
-//                .setPath(execPathString)
-//                .setContentKey(contentKey)
-//                .setExecutable(file.isExecutable());
-//    }
 }
