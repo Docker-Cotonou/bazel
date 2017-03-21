@@ -44,6 +44,8 @@ public class S3ActionCache implements RemoteActionCache {
             throws IOException, InterruptedException {
         repository.computeMerkleDigests(root);
         for (FileNode fileNode : repository.treeToFileNodes(root)) {
+            // TODO blacklist here (before calling toByteArray()) if file is too big (but is it
+            // okay to blacklist only _some_ of the files from a call to uploadTree? need to check)
             uploadBlob(fileNode.toByteArray());
         }
         for (TreeNode leaf : repository.leaves(root)) {
@@ -113,7 +115,7 @@ public class S3ActionCache implements RemoteActionCache {
             return null;
         }
         ContentDigest digest = ContentDigests.computeDigest(file);
-        if(isBlacklisted(file)) {
+        if(!isBlacklisted(file)) {
             cache.putFile(ContentDigests.toHexString(digest), file);
         }
         return digest;
@@ -145,6 +147,7 @@ public class S3ActionCache implements RemoteActionCache {
 
     @Override
     public ContentDigest uploadBlob(byte[] blob) throws InterruptedException {
+        // TODO blacklist if blob is too big
         ContentDigest digest = ContentDigests.computeDigest(blob);
         cache.put(ContentDigests.toHexString(digest), blob);
         return digest;
