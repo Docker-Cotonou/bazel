@@ -89,8 +89,10 @@ public final class S3ActionCache implements RemoteActionCache {
   @Override
   public void writeFile(String key, Path dest, boolean executable)
       throws IOException, CacheNotFoundException {
-    InputStream data = getBlob(key, dest);
-    try (OutputStream stream = dest.getOutputStream()) {
+    try (
+      InputStream data = getBlob(key, dest);
+      OutputStream stream = dest.getOutputStream()
+    ) {
       CacheEntry.parseFrom(data).getFileContent().writeTo(stream);
       dest.setExecutable(executable);
     }
@@ -172,15 +174,16 @@ public final class S3ActionCache implements RemoteActionCache {
   @Override
   public void writeActionOutput(String key, Path execRoot)
       throws IOException, CacheNotFoundException {
-    InputStream data = getBlob(key, execRoot);
-    if (data == null) {
-      throw new CacheNotFoundException("Action output cannot be found with key: " + key);
-    }
-    CacheEntry cacheEntry = CacheEntry.parseFrom(data);
-    for (FileEntry file : cacheEntry.getFilesList()) {
-      if (debug)
-        System.err.println("   >> Resoring file from cach entry: "+ file.getPath());
-      writeFile(file.getContentKey(), execRoot.getRelative(file.getPath()), file.getExecutable());
+    try (InputStream data = getBlob(key, execRoot)) {
+      if (data == null) {
+        throw new CacheNotFoundException("Action output cannot be found with key: " + key);
+      }
+      CacheEntry cacheEntry = CacheEntry.parseFrom(data);
+      for (FileEntry file : cacheEntry.getFilesList()) {
+        if (debug)
+          System.err.println("   >> Restoring file from cache entry: "+ file.getPath());
+        writeFile(file.getContentKey(), execRoot.getRelative(file.getPath()), file.getExecutable());
+      }
     }
   }
 
