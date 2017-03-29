@@ -131,7 +131,12 @@ public final class S3ActionCache implements RemoteActionCache {
     if (pathString.endsWith(".tar")) {
       return true;
     }
-    if (path.getPathFile().length() >= 67000000) {
+    if ("Mac OS X".equals(System.getProperty("os.name"))) {
+        if (pathString.endsWith(".pic.o") || pathString.endsWith(".pic.d")) {
+            return true;
+        }
+    }
+    if (path.getPathFile().length() >= 64*1024*1024) {
       if(debug) {
         System.err.println("blacklisted " + path.toString() + " because file is too large");
       }
