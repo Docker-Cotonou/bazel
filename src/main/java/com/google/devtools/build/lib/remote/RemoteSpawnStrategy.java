@@ -36,6 +36,10 @@ import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.worker.WorkerModule;
+import com.google.devtools.build.lib.worker.WorkerSpawnStrategy;
+import com.google.devtools.build.lib.actions.ActionContextProvider;
+import com.google.devtools.build.lib.actions.Executor.ActionContext;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
@@ -75,14 +79,30 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     this.remoteWorkExecutor = workExecutor;
   }
 
+  private void execFallback(Spawn spawn, ActionExecutionContext actionExecutionContext)
+      throws ExecException, InterruptedException {
+    // Asana: TypeScript compilation falls back to worker strategy
+    if (spawn.getMnemonic().equals("TsCompile") || spawn.getMnemonic().equals("BazelTsc")) {
+      for (ActionContextProvider actionContextProvider: WorkerModule.workerModule.getActionContextProviders()) {
+        for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
+          if (actionContext instanceof WorkerSpawnStrategy) {
+            ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
+            return;
+          }
+        }
+      }
+    }
+    standaloneStrategy.exec(spawn, actionExecutionContext);
+  }
+
   /**
    * Executes the given {@code spawn}.
    */
   @Override
   public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
-      throws ExecException {
+      throws ExecException, InterruptedException {
     if (!spawn.isRemotable()) {
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      execFallback(spawn, actionExecutionContext);
       return;
     }
 
@@ -95,7 +115,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       eventHandler.handle(
           Event.warn(
               spawn.getMnemonic() + " Cannot instantiate remote action cache. Running locally."));
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      execFallback(spawn, actionExecutionContext);
       return;
     }
 
@@ -167,7 +187,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       }
 
       // If nothing works then run spawn locally.
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      execFallback(spawn, actionExecutionContext);
       if (remoteActionCache != null) {
         remoteActionCache.putActionOutput(actionOutputKey, spawn.getOutputFiles());
       }

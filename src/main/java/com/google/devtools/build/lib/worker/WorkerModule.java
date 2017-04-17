@@ -43,6 +43,8 @@ public class WorkerModule extends BlazeModule {
   private WorkerPool workerPool;
   private WorkerPoolConfig workerPoolConfig;
 
+  public static WorkerModule workerModule;
+
   @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
     return "build".equals(command.name())
@@ -58,6 +60,7 @@ public class WorkerModule extends BlazeModule {
 
   @Subscribe
   public void buildStarting(BuildStartingEvent event) {
+    workerModule = this; // ha!
     buildRequest = event.getRequest();
     WorkerOptions options = buildRequest.getOptions(WorkerOptions.class);
     verbose = options.workerVerbose;
