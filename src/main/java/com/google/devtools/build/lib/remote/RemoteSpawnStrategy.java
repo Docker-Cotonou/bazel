@@ -52,6 +52,10 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
+import com.google.devtools.build.lib.worker.WorkerSpawnStrategy;
+import com.google.devtools.build.lib.exec.ActionContextProvider;
+import com.google.devtools.build.lib.actions.Executor.ActionContext;
+import com.google.devtools.build.lib.exec.ExecutorBuilder;
 
 /**
  * Strategy that uses a distributed cache for sharing action input and output files. Optionally this
@@ -77,6 +81,22 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
     this.verboseFailures = verboseFailures;
     this.options = options;
+  }
+
+  private void execFallback(Spawn spawn, ActionExecutionContext actionExecutionContext)
+      throws ExecException, InterruptedException {
+    // Asana: TypeScript compilation falls back to worker strategy
+    if (spawn.getMnemonic().equals("TsCompile") || spawn.getMnemonic().equals("BazelTsc")) {
+      for (ActionContextProvider actionContextProvider: ExecutorBuilder.executorBuilder.getActionContextProviders()) {
+        for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
+          if (actionContext instanceof WorkerSpawnStrategy) {
+            ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
+            return;
+          }
+        }
+      }
+    }
+    standaloneStrategy.exec(spawn, actionExecutionContext);
   }
 
   private Action buildAction(
@@ -110,7 +130,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   private void execLocally(
       Spawn spawn, ActionExecutionContext actionExecutionContext, RemoteActionCache actionCache,
       ActionKey actionKey) throws ExecException, InterruptedException {
-    standaloneStrategy.exec(spawn, actionExecutionContext);
+    execFallback(spawn, actionExecutionContext);
     if (actionCache != null && actionKey != null) {
       ArrayList<Path> outputFiles = new ArrayList<>();
       for (ActionInput output : spawn.getOutputFiles()) {
@@ -190,7 +210,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       }
     }
     if (!spawn.isRemotable() || actionCache == null) {
-      standaloneStrategy.exec(spawn, actionExecutionContext);
+      execFallback(spawn, actionExecutionContext);
       return;
     }
 

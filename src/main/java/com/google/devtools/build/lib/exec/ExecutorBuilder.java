@@ -32,6 +32,12 @@ public class ExecutorBuilder {
   private ActionInputFileCache cache;
   private ActionInputPrefetcher prefetcher;
 
+  public static ExecutorBuilder executorBuilder;
+
+  public ExecutorBuilder() {
+    executorBuilder = this; // ha!
+  }
+
   // These methods shouldn't be public, but they have to be right now as ExecutionTool is in another
   // package.
   public ImmutableList<ActionContextProvider> getActionContextProviders() {
