@@ -211,7 +211,7 @@ public class S3ActionCache implements RemoteActionCache {
             return true;
         }
         if ("Mac OS X".equals(System.getProperty("os.name"))) {
-            if (pathString.endsWith(".pic.o") || pathString.endsWith(".pic.d")) {
+            if (pathString.endsWith(".o") || pathString.endsWith(".d")) {
                 return true;
             }
         }
