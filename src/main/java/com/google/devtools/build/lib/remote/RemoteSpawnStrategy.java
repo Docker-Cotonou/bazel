@@ -86,12 +86,14 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   private void execFallback(Spawn spawn, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
     // Asana: TypeScript compilation falls back to worker strategy
-    if (spawn.getMnemonic().equals("TsCompile")) {
-      for (ActionContextProvider actionContextProvider: ExecutorBuilder.executorBuilder.getActionContextProviders()) {
-        for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
-          if (actionContext instanceof WorkerSpawnStrategy) {
-            ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
-            return;
+    if (options.typeScriptWorker) {
+      if (spawn.getMnemonic().equals("TsCompile")) {
+        for (ActionContextProvider actionContextProvider: ExecutorBuilder.executorBuilder.getActionContextProviders()) {
+          for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
+            if (actionContext instanceof WorkerSpawnStrategy) {
+              ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
+              return;
+            }
           }
         }
       }

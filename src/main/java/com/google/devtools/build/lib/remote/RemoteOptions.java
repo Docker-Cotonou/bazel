@@ -138,4 +138,12 @@ public final class RemoteOptions extends OptionsBase {
       help = "Whether to fall back to standalone strategy if remote fails."
     )
   public boolean remoteAllowLocalFallback;
+
+  @Option(
+    name = "typescript_worker",
+    defaultValue = "true",
+    category = "strategy",
+    help = "If enabled, remote TsCompile action falls back 'worker' strategy instead of 'standalone'."
+  )
+  public boolean typeScriptWorker;
 }
