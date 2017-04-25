@@ -64,6 +64,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   private final StandaloneSpawnStrategy standaloneStrategy;
   private final RemoteActionCache remoteActionCache;
   private final RemoteWorkExecutor remoteWorkExecutor;
+  private final RemoteOptions options;
 
   RemoteSpawnStrategy(
       Map<String, String> clientEnv,
@@ -77,17 +78,20 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
     this.remoteActionCache = actionCache;
     this.remoteWorkExecutor = workExecutor;
+	this.options = options;
   }
 
   private void execFallback(Spawn spawn, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
     // Asana: TypeScript compilation falls back to worker strategy
-    if (spawn.getMnemonic().equals("TsCompile")) {
-      for (ActionContextProvider actionContextProvider: WorkerModule.workerModule.getActionContextProviders()) {
-        for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
-          if (actionContext instanceof WorkerSpawnStrategy) {
-            ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
-            return;
+    if (options.typeScriptWorker) {
+      if (spawn.getMnemonic().equals("TsCompile")) {
+        for (ActionContextProvider actionContextProvider: WorkerModule.workerModule.getActionContextProviders()) {
+          for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
+            if (actionContext instanceof WorkerSpawnStrategy) {
+              ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
+              return;
+            }
           }
         }
       }
