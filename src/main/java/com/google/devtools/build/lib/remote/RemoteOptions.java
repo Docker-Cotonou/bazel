@@ -14,8 +14,12 @@
 
 package com.google.devtools.build.lib.remote;
 
+import com.google.devtools.common.options.Converters.AssignmentConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
+
+import java.util.List;
+import java.util.Map;
 
 /**
  * Options for remote execution and distributed caching.
@@ -73,11 +77,15 @@ public final class RemoteOptions extends OptionsBase {
   )
   public String remoteWorker;
 
-  @Option(
-    name = "typescript_worker",
-    defaultValue = "true",
-    category = "strategy",
-    help = "If enabled, remote TsCompile action falls back 'worker' strategy instead of 'standalone'."
-  )
-  public boolean typeScriptWorker;
+  @Option(name = "remote_fallback_strategy",
+      allowMultiple = true,
+      converter = AssignmentConverter.class,
+      defaultValue = "",
+      category = "strategy",
+      help = "Fallback strategy if 'remote' can't be used. Allowed values are "
+          + "'worker' and 'standalone'. Example: 'TsCompile=worker' means that "
+          + "when compiling TypeScript, if 'remote' strategy can't be used then "
+          + "'worker' strategy should be used. '*=worker' means to fall back to "
+          + "worker for all action types.")
+  public List<Map.Entry<String, String>> remoteFallbackStrategy;
 }

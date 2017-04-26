@@ -78,24 +78,47 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
     this.remoteActionCache = actionCache;
     this.remoteWorkExecutor = workExecutor;
-	this.options = options;
+    this.options = options;
+  }
+
+  private String remoteFallbackStrategy(String mnemonic) throws ExecException {
+    String defaultFallbackStrategy = "standalone";
+    String fallbackStrategy = null;
+
+    for (Map.Entry<String,String> entry: options.remoteFallbackStrategy) {
+      if (entry.getKey().equals(mnemonic)) {
+        fallbackStrategy = entry.getValue();
+      }
+      if (entry.getKey().equals("*")) {
+        defaultFallbackStrategy = entry.getValue();
+      }
+    }
+
+    if (fallbackStrategy == null) {
+      fallbackStrategy = defaultFallbackStrategy;
+    }
+
+    if (!fallbackStrategy.equals("worker") && !fallbackStrategy.equals("standalone")) {
+      throw new UserExecException("The only legal fallback strategies from 'remote' are 'worker' and 'standalone'");
+    }
+
+    return fallbackStrategy;
   }
 
   private void execFallback(Spawn spawn, ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException {
-    // Asana: TypeScript compilation falls back to worker strategy
-    if (options.typeScriptWorker) {
-      if (spawn.getMnemonic().equals("TsCompile")) {
-        for (ActionContextProvider actionContextProvider: WorkerModule.workerModule.getActionContextProviders()) {
-          for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
-            if (actionContext instanceof WorkerSpawnStrategy) {
-              ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
-              return;
-            }
+    String fallbackStrategy = remoteFallbackStrategy(spawn.getMnemonic());
+    if (fallbackStrategy.equals("worker")) {
+      for (ActionContextProvider actionContextProvider: WorkerModule.workerModule.getActionContextProviders()) {
+        for (ActionContext actionContext: actionContextProvider.getActionContexts()) {
+          if (actionContext instanceof WorkerSpawnStrategy) {
+            ((WorkerSpawnStrategy) actionContext).exec(spawn, actionExecutionContext);
+            return;
           }
         }
       }
     }
+
     standaloneStrategy.exec(spawn, actionExecutionContext);
   }
 
