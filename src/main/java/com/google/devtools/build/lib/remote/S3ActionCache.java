@@ -28,6 +28,7 @@ import com.google.protobuf.ByteString;
 
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.AmazonClientException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -36,13 +37,16 @@ import java.io.OutputStream;
 import java.util.Collection;
 
 /**
- * xcxc
+ * A remote action cache that uses S3 as its backing store.
  */
 @ThreadSafe
 public final class S3ActionCache implements RemoteActionCache {
   private final Path execRoot;
   private final String bucketName;
   private final boolean debug;
+
+  private int numConsecutiveErrors;
+  private long disableUntilTimeMillis;
 
   // xcxc add retry wrappers ...
   private final AmazonS3 client = new AmazonS3Client(new DefaultAWSCredentialsProviderChain());
@@ -104,17 +108,65 @@ public final class S3ActionCache implements RemoteActionCache {
     }
   }
 
+  private void recordCacheFailedOperation(Exception e) {
+    final int MAX_CONSECUTIVE_ERRORS = 10;
+    final int MINUTES_DISABLE_CACHE = 5;
+
+    System.err.println("S3 cache: " + e.toString());
+    ++numConsecutiveErrors;
+    if (numConsecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      System.err.println("S3 cache encountered multiple consecutive errors; disabling cache for " + MINUTES_DISABLE_CACHE + " minutes.");
+      disableUntilTimeMillis = System.currentTimeMillis() + MINUTES_DISABLE_CACHE * 60 * 1000;
+      numConsecutiveErrors = 0;
+    }
+  }
+
+  private void recordCacheSuccessfulOperation() {
+    numConsecutiveErrors = 0;
+  }
+
+  private boolean isCacheEnabled() {
+    if (disableUntilTimeMillis != 0) {
+      if (System.currentTimeMillis() > disableUntilTimeMillis) {
+        disableUntilTimeMillis = 0;
+        numConsecutiveErrors = 0;
+      }
+    }
+    return disableUntilTimeMillis == 0;
+  }
 
   private boolean fileAlreadyExistsOrBlacklisted(String key, Path file) {
     if (isBlacklisted(file)) {
       return true;
     }
 
+    if (!isCacheEnabled()) {
+      return false;
+    }
+
     long t0 = System.currentTimeMillis();
-    boolean r = client.doesObjectExist(bucketName, key);
-    String found = r ? "Hit" : "Miss";
-      if (debug)
-        System.err.println("S3 Cache " + found + ": " + file.toString() + "  key:"+ key +" (" + (System.currentTimeMillis() - t0) + "ms)");
+    boolean r;
+    String exceptionMessage = null;
+    try {
+      r = client.doesObjectExist(bucketName, key);
+      if (r) {
+        recordCacheSuccessfulOperation();
+      } else {
+        // If doesObjectExist() returned false, don't record a successful operation
+        // or a failed operation. For example, it may have returned false if we passed
+        // a bad bucket name.
+      }
+    } catch (AmazonClientException e) {
+      // Some sort of Amazon error; degrade gracefully, assume we couldn't find the file
+      r = false;
+      exceptionMessage = e.toString();
+      recordCacheFailedOperation(e);
+    }
+    if (debug) {
+      String found = r ? "Hit" : "Miss";
+      System.err.println("S3 Cache " + found + ": " + file.toString() + "  key:"+ key +" (" + (System.currentTimeMillis() - t0) + "ms)"
+          + ((exceptionMessage != null) ? (" " + exceptionMessage) : ""));
+    }
 
     return r;
   }
@@ -153,34 +205,61 @@ public final class S3ActionCache implements RemoteActionCache {
       throw new CacheNotFoundException("Blacklisted file pattern");
     }
 
+    if (!isCacheEnabled()) {
+      throw new CacheNotFoundException("Cache is disabled");
+    }
+
     long t0 = System.currentTimeMillis();
     try {
       S3Object obj = client.getObject(new GetObjectRequest(bucketName, key));
       InputStream stream = obj.getObjectContent();
       if (debug)
         System.err.println("S3 Cache Download: " + path.toString() + " key:"+ key +" (" + (System.currentTimeMillis() - t0) + "ms)");
+      recordCacheSuccessfulOperation();
       return stream;
     }
-    catch (AmazonS3Exception e) {
-      if (e.getStatusCode() == 404) {
-        if (debug)
-          System.err.println("S3 key not found key:"+ key +" " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
-        throw new CacheNotFoundException("File content cannot be found with key: " + key);
+    catch (AmazonClientException e) {
+      // Some sort of Amazon error; degrade gracefully, assume we couldn't find the file
+      if (debug) {
+        String exceptionMessage;
+        if (e instanceof AmazonS3Exception && ((AmazonS3Exception)e).getStatusCode() == 404 && "NoSuchKey".equals(((AmazonS3Exception)e).getErrorCode())) {
+          exceptionMessage = "";
+          recordCacheSuccessfulOperation(); // 404 is not a failed operation, it's normal
+        } else {
+          exceptionMessage = ": " + e.toString();
+          recordCacheFailedOperation(e);
+        }
 
+        System.err.println("S3 key not found key:"+ key +" " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)" + exceptionMessage);
       }
-      throw e;
+      throw new CacheNotFoundException("File content cannot be found with key: " + key);
     }
   }
 
   private void putBlob(String key, byte[] blob, Path file)
   {
+    if (!isCacheEnabled()) {
+      return;
+    }
+
     long t0 = System.currentTimeMillis();
-    client.putObject(new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
+    String exceptionMessage = null;
+    try {
+      client.putObject(new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
+      recordCacheSuccessfulOperation();
+    } catch (AmazonClientException e) {
+      // Some sort of Amazon error; degrade gracefully, ignore the fact that we couldn't upload to the cache
+      exceptionMessage = e.toString();
+      recordCacheFailedOperation(e);
+    }
     if (debug) {
+      if (exceptionMessage != null) {
+        exceptionMessage = ": " + exceptionMessage;
+      }
       if (file == null) {
-        System.err.println("S3 Cache Upload: key:"+ key +"  (" + (System.currentTimeMillis() - t0) + "ms)");
+        System.err.println("S3 Cache Upload: key:"+ key +"  (" + (System.currentTimeMillis() - t0) + "ms)" + exceptionMessage);
       } else {
-        System.err.println("S3 Cache Upload: key:"+ key +" " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)");
+        System.err.println("S3 Cache Upload: key:"+ key +" " + file.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)" + exceptionMessage);
       }
     }
   }
