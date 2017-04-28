@@ -220,16 +220,16 @@ public final class S3ActionCache implements RemoteActionCache {
     }
     catch (AmazonClientException e) {
       // Some sort of Amazon error; degrade gracefully, assume we couldn't find the file
-      if (debug) {
-        String exceptionMessage;
-        if (e instanceof AmazonS3Exception && ((AmazonS3Exception)e).getStatusCode() == 404 && "NoSuchKey".equals(((AmazonS3Exception)e).getErrorCode())) {
-          exceptionMessage = "";
-          recordCacheSuccessfulOperation(); // 404 is not a failed operation, it's normal
-        } else {
-          exceptionMessage = ": " + e.toString();
-          recordCacheFailedOperation(e);
-        }
+      String exceptionMessage;
+      if (e instanceof AmazonS3Exception && ((AmazonS3Exception)e).getStatusCode() == 404 && "NoSuchKey".equals(((AmazonS3Exception)e).getErrorCode())) {
+        exceptionMessage = "";
+        recordCacheSuccessfulOperation(); // 404 is not a failed operation, it's normal
+      } else {
+        exceptionMessage = ": " + e.toString();
+        recordCacheFailedOperation(e);
+      }
 
+      if (debug) {
         System.err.println("S3 key not found key:"+ key +" " + path.toString() + " (" + (System.currentTimeMillis() - t0) + "ms)" + exceptionMessage);
       }
       throw new CacheNotFoundException("File content cannot be found with key: " + key);
