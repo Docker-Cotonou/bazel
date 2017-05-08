@@ -46,11 +46,11 @@ public final class S3ActionCache2 {
     private final String bucketName;
     private final boolean debug;
 
-    private int numConsecutiveErrors;
-    private long disableUntilTimeMillis;
+    private static volatile int numConsecutiveErrors;
+    private static volatile long disableUntilTimeMillis;
 
     // xcxc add retry wrappers ...
-    private final AmazonS3 client = new AmazonS3Client(new DefaultAWSCredentialsProviderChain());
+    private static final AmazonS3 client = new AmazonS3Client(new DefaultAWSCredentialsProviderChain());
 
     /**
      * Construct an action cache using JCache API.
@@ -68,12 +68,14 @@ public final class S3ActionCache2 {
             return; // usually this is because the user pressed ctrl-c or something
         }
 
-        System.err.println("S3 cache: " + e.toString());
-        ++numConsecutiveErrors;
-        if (numConsecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            System.err.println("S3 cache encountered multiple consecutive errors; disabling cache for " + MINUTES_DISABLE_CACHE + " minutes.");
-            disableUntilTimeMillis = System.currentTimeMillis() + MINUTES_DISABLE_CACHE * 60 * 1000;
-            numConsecutiveErrors = 0;
+        if (isCacheEnabled()) {
+            System.err.println("S3 cache: " + e.toString());
+            ++numConsecutiveErrors;
+            if (numConsecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                System.err.println("S3 cache encountered multiple consecutive errors; disabling cache for " + MINUTES_DISABLE_CACHE + " minutes.");
+                disableUntilTimeMillis = System.currentTimeMillis() + MINUTES_DISABLE_CACHE * 60 * 1000;
+                numConsecutiveErrors = 0;
+            }
         }
     }
 
