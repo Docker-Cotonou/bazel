@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.remote;
 
+import com.amazonaws.AbortedException;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.services.s3.AmazonS3;
@@ -62,6 +63,10 @@ public final class S3ActionCache2 {
     private void recordCacheFailedOperation(Exception e) {
         final int MAX_CONSECUTIVE_ERRORS = 10;
         final int MINUTES_DISABLE_CACHE = 5;
+
+        if (e instanceof com.amazonaws.AbortedException) {
+            return; // usually this is because the user pressed ctrl-c or something
+        }
 
         System.err.println("S3 cache: " + e.toString());
         ++numConsecutiveErrors;
