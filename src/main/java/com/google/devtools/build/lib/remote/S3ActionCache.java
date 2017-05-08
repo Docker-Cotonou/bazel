@@ -29,6 +29,7 @@ import com.google.protobuf.ByteString;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.AmazonClientException;
+import com.amazonaws.AbortedException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -111,6 +112,10 @@ public final class S3ActionCache implements RemoteActionCache {
   private void recordCacheFailedOperation(Exception e) {
     final int MAX_CONSECUTIVE_ERRORS = 10;
     final int MINUTES_DISABLE_CACHE = 5;
+
+    if (e instanceof com.amazonaws.AbortedException) {
+      return; // usually this is because the user pressed ctrl-c or something
+    }
 
     System.err.println("S3 cache: " + e.toString());
     ++numConsecutiveErrors;
