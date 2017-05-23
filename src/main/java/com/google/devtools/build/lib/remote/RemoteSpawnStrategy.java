@@ -258,16 +258,6 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       actionKey = ContentDigests.computeActionKey(action);
       ActionResult result = this.options.remoteAcceptCached
           ? actionCache.getCachedActionResult(actionKey) : null;
-      if (this.options.remoteAcceptCached && this.options.remoteCacheDebug) {
-        System.err.println("  Action command:");
-        for (String arg: spawn.getArguments()) {
-          System.err.println("    " + arg);
-        }
-        System.err.println("  Action output files:");
-        for (ActionInput file: spawn.getOutputFiles()) {
-          System.err.println("    " + file);
-        }
-      }
       boolean acceptCachedResult = this.options.remoteAcceptCached;
       if (result != null) {
         // We don't cache failed actions, so we know the outputs exist.

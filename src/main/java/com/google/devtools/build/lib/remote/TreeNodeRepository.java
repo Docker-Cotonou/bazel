@@ -242,25 +242,27 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
       int inputsStart,
       int inputsEnd,
       int segmentIndex) {
-    if (segmentIndex == segments.get(inputsStart).size()) {
-      // Leaf node reached. Must be unique.
-      Preconditions.checkArgument(
-          inputsStart == inputsEnd - 1, "Encountered two inputs with the same path.");
-      // TODO: check that the actionInput is a single file!
-      return interner.intern(new TreeNode(inputs.get(inputsStart)));
-    }
     ArrayList<TreeNode.ChildEntry> entries = new ArrayList<>();
-    String segment = segments.get(inputsStart).get(segmentIndex);
-    for (int inputIndex = inputsStart; inputIndex < inputsEnd; ++inputIndex) {
-      if (inputIndex + 1 == inputsEnd
-          || segment != segments.get(inputIndex + 1).get(segmentIndex)) {
-        entries.add(
-            new TreeNode.ChildEntry(
-                segment,
-                buildParentNode(inputs, segments, inputsStart, inputIndex + 1, segmentIndex + 1)));
-        if (inputIndex + 1 < inputsEnd) {
-          inputsStart = inputIndex + 1;
-          segment = segments.get(inputsStart).get(segmentIndex);
+    if (segments.size() > 0) {
+      if (segmentIndex == segments.get(inputsStart).size()) {
+        // Leaf node reached. Must be unique.
+        Preconditions.checkArgument(
+            inputsStart == inputsEnd - 1, "Encountered two inputs with the same path.");
+        // TODO: check that the actionInput is a single file!
+        return interner.intern(new TreeNode(inputs.get(inputsStart)));
+      }
+      String segment = segments.get(inputsStart).get(segmentIndex);
+      for (int inputIndex = inputsStart; inputIndex < inputsEnd; ++inputIndex) {
+        if (inputIndex + 1 == inputsEnd
+            || segment != segments.get(inputIndex + 1).get(segmentIndex)) {
+          entries.add(
+              new TreeNode.ChildEntry(
+                  segment,
+                  buildParentNode(inputs, segments, inputsStart, inputIndex + 1, segmentIndex + 1)));
+          if (inputIndex + 1 < inputsEnd) {
+            inputsStart = inputIndex + 1;
+            segment = segments.get(inputsStart).get(segmentIndex);
+          }
         }
       }
     }
