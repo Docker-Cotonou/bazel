@@ -1,13 +1,16 @@
 package com.google.devtools.build.lib.remote;
 
+import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ActionInputFileCache;
+import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.vfs.Path;
 
+import com.google.protobuf.ByteString;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collection;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.remote.ContentDigests.ActionKey;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ActionResult;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.FileMetadata;
@@ -15,17 +18,9 @@ import com.google.devtools.build.lib.remote.RemoteProtocol.FileNode;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Output;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Output.ContentCase;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
-import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
-import com.google.devtools.build.lib.vfs.Path;
-import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
-import java.io.IOException;
-import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Semaphore;
 
 /**
  * Created by tylernisonoff on 3/16/17.
@@ -122,6 +117,22 @@ public class S3ActionCache implements RemoteActionCache {
     }
 
     @Override
+    public ContentDigest uploadFileContents(
+        ActionInput input, Path execRoot, ActionInputFileCache inputCache)
+        throws IOException, InterruptedException {
+        // This unconditionally reads the whole file into memory first!
+        if (input instanceof VirtualActionInput) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            ((VirtualActionInput) input).writeTo(buffer);
+            byte[] blob = buffer.toByteArray();
+            return uploadBlob(blob, ContentDigests.computeDigest(blob));
+        }
+        return uploadBlob(
+            ByteString.readFrom(execRoot.getRelative(input.getExecPathString()).getInputStream())
+                .toByteArray(),
+            ContentDigests.getDigestFromInputCache(input, inputCache));
+    }
+
     public void downloadFileContents(ContentDigest digest, Path dest, boolean executable)
             throws IOException, CacheNotFoundException {
         // This unconditionally downloads the whole file into memory first!
@@ -147,8 +158,11 @@ public class S3ActionCache implements RemoteActionCache {
 
     @Override
     public ContentDigest uploadBlob(byte[] blob) throws InterruptedException {
+        return uploadBlob(blob, ContentDigests.computeDigest(blob));
+    }
+
+    private ContentDigest uploadBlob(byte[] blob, ContentDigest digest) throws InterruptedException {
         // TODO blacklist if blob is too big
-        ContentDigest digest = ContentDigests.computeDigest(blob);
         cache.put(ContentDigests.toHexString(digest), blob);
         return digest;
     }
