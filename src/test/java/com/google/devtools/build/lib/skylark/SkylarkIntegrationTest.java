@@ -36,6 +36,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.AttributeContainer;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
+import com.google.devtools.build.lib.packages.ClassObjectConstructor;
 import com.google.devtools.build.lib.packages.SkylarkClassObject;
 import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
@@ -323,7 +324,7 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
                 "\tFile \"/workspace/test/skylark/functions.bzl\", line 2, in first",
                 "\t\tsecond(a, b)",
                 "\tFile \"/workspace/test/skylark/functions.bzl\", line 5, in second",
-                "\t\tthird('legal')",
+                "\t\tthird(\"legal\")",
                 "\tFile \"/workspace/test/skylark/functions.bzl\", line 7, in third",
                 errorMessage);
     scratch.file(
@@ -756,7 +757,7 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
             target.getProvider(FileProvider.class).getFilesToBuild()))
         .containsExactly("foo.txt");
   }
-  
+
   @Test
   public void testRuleClassImplicitOutputs() throws Exception {
     scratch.file(
@@ -932,7 +933,7 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
     );
 
     ConfiguredTarget configuredTarget = getConfiguredTarget("//test:r");
-    SkylarkClassObjectConstructor.Key key = new SkylarkClassObjectConstructor.SkylarkKey(
+    ClassObjectConstructor.Key key = new SkylarkClassObjectConstructor.SkylarkKey(
         Label.create(configuredTarget.getLabel().getPackageIdentifier(), "extension.bzl"),
         "my_provider");
     SkylarkProviders skylarkProviders = configuredTarget.getProvider(SkylarkProviders.class);
@@ -959,7 +960,7 @@ public class SkylarkIntegrationTest extends BuildViewTestCase {
     );
 
     ConfiguredTarget configuredTarget  = getConfiguredTarget("//test:r");
-    SkylarkClassObjectConstructor.Key key = new SkylarkClassObjectConstructor.SkylarkKey(
+    ClassObjectConstructor.Key key = new SkylarkClassObjectConstructor.SkylarkKey(
         Label.create(configuredTarget.getLabel().getPackageIdentifier(), "extension.bzl"),
         "my_provider");
     SkylarkProviders skylarkProviders = configuredTarget.getProvider(SkylarkProviders.class);

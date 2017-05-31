@@ -4,7 +4,7 @@ default_target_cpu: "same_as_host"
 
 default_toolchain {
   cpu: "%{cpu}"
-  toolchain_identifier: "local"
+  toolchain_identifier: "%{default_toolchain_name}"
 }
 
 default_toolchain {
@@ -14,7 +14,12 @@ default_toolchain {
 
 default_toolchain {
   cpu: "x64_windows_msvc"
-  toolchain_identifier: "vc_14_0_x64"
+  toolchain_identifier: "msvc_x64"
+}
+
+default_toolchain {
+  cpu: "x64_windows_msys"
+  toolchain_identifier: "msys_x64"
 }
 
 default_toolchain {
@@ -93,7 +98,7 @@ toolchain {
 }
 
 toolchain {
-  toolchain_identifier: "local"
+  toolchain_identifier: "%{toolchain_name}"
 %{content}
 
   compilation_mode_flags {
@@ -105,16 +110,18 @@ toolchain {
 %{opt_content}
   }
   linking_mode_flags { mode: DYNAMIC }
+
+%{coverage}
 }
 
 toolchain {
-  toolchain_identifier: "vc_14_0_x64"
+  toolchain_identifier: "msvc_x64"
   host_system_name: "local"
   target_system_name: "local"
 
   abi_version: "local"
   abi_libc_version: "local"
-  target_cpu: "x64_windows_msvc"
+  target_cpu: "x64_windows"
   compiler: "cl"
   target_libc: "msvcrt140"
   default_python_version: "python2.7"
@@ -335,6 +342,7 @@ toolchain {
      tool {
          tool_path: 'wrapper/bin/msvc_link.bat'
      }
+     implies: 'strip_debug_symbols'
      implies: 'linkstamps'
      implies: 'output_execpath_flags'
      implies: 'input_param_flags'
@@ -348,6 +356,7 @@ toolchain {
      tool {
          tool_path: 'wrapper/bin/msvc_link.bat'
      }
+     implies: 'strip_debug_symbols'
      implies: 'shared_flag'
      implies: 'linkstamps'
      implies: 'output_execpath_flags'
@@ -405,11 +414,25 @@ toolchain {
     tool {
       tool_path: 'wrapper/bin/msvc_link.bat'
     }
+    implies: 'strip_debug_symbols'
     implies: 'linker_param_file'
   }
 
   feature {
     name: 'has_configured_linker_path'
+  }
+
+  feature {
+    name: 'strip_debug_symbols'
+    flag_set {
+      action: 'c++-link-executable'
+      action: 'c++-link-dynamic-library'
+      action: 'c++-link-interface-dynamic-library'
+      flag_group {
+        expand_if_all_available: 'strip_debug_symbols'
+        flag: '-Wl,-S'
+      }
+    }
   }
 
   feature {
@@ -484,69 +507,87 @@ toolchain {
       flag_group {
         iterate_over: 'libraries_to_link'
         flag_group {
-          expand_if_all_available: 'libraries_to_link.object_file_group_presence'
+          expand_if_equal: {
+            variable: 'libraries_to_link.type'
+            value: 'object_file_group'
+          }
           iterate_over: 'libraries_to_link.object_files'
           flag_group {
-            expand_if_all_available: 'libraries_to_link.no_whole_archive_presence'
+            expand_if_false: 'libraries_to_link.is_whole_archive'
             flag: '%{libraries_to_link.object_files}'
           }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.whole_archive_presence'
+            expand_if_true: 'libraries_to_link.is_whole_archive'
             flag: '/WHOLEARCHIVE:%{libraries_to_link.object_files}'
           }
         }
         flag_group {
-          expand_if_all_available: 'libraries_to_link.object_file_presence'
+          expand_if_equal: {
+            variable: 'libraries_to_link.type'
+            value: 'object_file'
+          }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.no_whole_archive_presence'
+            expand_if_false: 'libraries_to_link.is_whole_archive'
             flag: '%{libraries_to_link.name}'
           }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.whole_archive_presence'
+            expand_if_true: 'libraries_to_link.is_whole_archive'
             flag: '/WHOLEARCHIVE:%{libraries_to_link.name}'
           }
         }
         flag_group {
-          expand_if_all_available: 'libraries_to_link.interface_library_presence'
+          expand_if_equal: {
+            variable: 'libraries_to_link.type'
+            value: 'interface_library'
+          }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.no_whole_archive_presence'
+            expand_if_false: 'libraries_to_link.is_whole_archive'
             flag: '%{libraries_to_link.name}'
           }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.whole_archive_presence'
+            expand_if_true: 'libraries_to_link.is_whole_archive'
             flag: '/WHOLEARCHIVE:%{libraries_to_link.name}'
           }
         }
         flag_group {
-          expand_if_all_available: 'libraries_to_link.static_library_presence'
+          expand_if_equal: {
+            variable: 'libraries_to_link.type'
+            value: 'static_library'
+          }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.no_whole_archive_presence'
+            expand_if_false: 'libraries_to_link.is_whole_archive'
             flag: '%{libraries_to_link.name}'
           }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.whole_archive_presence'
+            expand_if_true: 'libraries_to_link.is_whole_archive'
             flag: '/WHOLEARCHIVE:%{libraries_to_link.name}'
           }
         }
         flag_group {
-          expand_if_all_available: 'libraries_to_link.dynamic_library_presence'
+          expand_if_equal: {
+            variable: 'libraries_to_link.type'
+            value: 'dynamic_library'
+          }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.no_whole_archive_presence'
+            expand_if_false: 'libraries_to_link.is_whole_archive'
             flag: '%{libraries_to_link.name}'
           }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.whole_archive_presence'
+            expand_if_true: 'libraries_to_link.is_whole_archive'
             flag: '/WHOLEARCHIVE:%{libraries_to_link.name}'
           }
         }
         flag_group {
-          expand_if_all_available: 'libraries_to_link.versioned_dynamic_library_presence'
+          expand_if_equal: {
+            variable: 'libraries_to_link.type'
+            value: 'versioned_dynamic_library'
+          }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.no_whole_archive_presence'
+            expand_if_false: 'libraries_to_link.is_whole_archive'
             flag: '%{libraries_to_link.name}'
           }
           flag_group {
-            expand_if_all_available: 'libraries_to_link.whole_archive_presence'
+            expand_if_true: 'libraries_to_link.is_whole_archive'
             flag: '/WHOLEARCHIVE:%{libraries_to_link.name}'
           }
         }

@@ -22,6 +22,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(SCRIPT_DIR)
 
 GCCPATTERNS = [
+    ('-I(.+)', ['/I$0']),
     ('-m(32|64)', ['$TARGET_ARCH']),
     ('-Xcompilation-mode=(dbg|fastbuild|opt)', ['$COMPILATION_MODE']),
     ('-msse', ['/arch:SSE']),
@@ -51,7 +52,8 @@ GCCPATTERNS = [
     ('-Wno-conversion', ['/wd4244', '/wd4267']),
     ('-Wno-sign-conversion', []),
     ('-Wno-implicit-fallthrough', []),
-    ('-Wno-implicit-function-declaration', []),
+    ('-Wno-implicit-function-declaration', ['/wd4013']),
+    ('-Wimplicit-function-declaration', ['/we4013']),
     ('-Wcovered-switch-default', ['/we4062']),
     ('-Wno-covered-switch-default', ['/wd4062']),
     ('-Wno-error', []),

@@ -25,6 +25,7 @@ import com.google.devtools.build.lib.rules.java.JavaHelper;
 import com.google.devtools.build.lib.rules.java.JavaToolchainProvider;
 import com.google.devtools.build.lib.rules.java.Jvm;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Map;
 
@@ -67,9 +68,12 @@ public class ApkActionsBuilder {
   /**
    * Sets the dex file to be included in the APK.
    *
-   * <p>Can be either a plain .dex or a .zip file containing dexes.
+   * <p>Can be either a plain classes.dex or a .zip file containing dexes.
    */
   public ApkActionsBuilder setClassesDex(Artifact classesDex) {
+    Preconditions.checkArgument(
+        classesDex.getFilename().endsWith(".zip")
+            || classesDex.getFilename().equals("classes.dex"));
     this.classesDex = classesDex;
     return this;
   }
@@ -144,31 +148,15 @@ public class ApkActionsBuilder {
     }
 
     if (signedApk != null) {
-      if (signingMethod.signLegacy()) {
-        // With the legacy signer, zipalignment is performed after signing. So if a zipaligned APK
-        // is requested, we need an intermediate signed-but-not-zipaligned apk artifact.
-        Artifact intermediateSignedApk = zipalignApk
-            ? AndroidBinary.getDxArtifact(ruleContext, "signed_" + signedApk.getFilename())
-            : signedApk;
-        legacyBuildApk(
-            ruleContext,
-            intermediateSignedApk,
-            semantics.getApkDebugSigningKey(ruleContext),
-            "Generating signed " + apkName);
-        if (zipalignApk) {
-          zipalignApk(ruleContext, intermediateSignedApk, signedApk);
-        }
-      } else {
-        Artifact apkToSign = intermediateUnsignedApk;
-        // With apksigner, zipalignment is performed before signing. So if a zipaligned APK is
-        // requested, we need an intermediate zipaligned-but-not-signed apk artifact.
-        if (zipalignApk) {
-          apkToSign =
-              AndroidBinary.getDxArtifact(ruleContext, "zipaligned_" + signedApk.getFilename());
-          zipalignApk(ruleContext, intermediateUnsignedApk, apkToSign);
-        }
-        signApk(ruleContext, semantics.getApkDebugSigningKey(ruleContext), apkToSign, signedApk);
+      Artifact apkToSign = intermediateUnsignedApk;
+      // Zipalignment is performed before signing. So if a zipaligned APK is requested, we need an
+      // intermediate zipaligned-but-not-signed apk artifact.
+      if (zipalignApk) {
+        apkToSign =
+            AndroidBinary.getDxArtifact(ruleContext, "zipaligned_" + signedApk.getFilename());
+        zipalignApk(ruleContext, intermediateUnsignedApk, apkToSign);
       }
+      signApk(ruleContext, semantics.getApkDebugSigningKey(ruleContext), apkToSign, signedApk);
     }
   }
 

@@ -125,7 +125,6 @@ import com.google.devtools.build.lib.rules.java.JvmConfigurationLoader;
 import com.google.devtools.build.lib.rules.java.ProguardLibraryRule;
 import com.google.devtools.build.lib.rules.java.proto.JavaProtoSkylarkCommon;
 import com.google.devtools.build.lib.rules.objc.AppleBinaryRule;
-import com.google.devtools.build.lib.rules.objc.AppleDebugOutputsProvider;
 import com.google.devtools.build.lib.rules.objc.AppleSkylarkCommon;
 import com.google.devtools.build.lib.rules.objc.AppleStaticLibraryRule;
 import com.google.devtools.build.lib.rules.objc.AppleWatch1ExtensionRule;
@@ -159,6 +158,9 @@ import com.google.devtools.build.lib.rules.objc.ObjcProvider;
 import com.google.devtools.build.lib.rules.objc.ObjcRuleClasses;
 import com.google.devtools.build.lib.rules.objc.ObjcXcodeprojRule;
 import com.google.devtools.build.lib.rules.objc.XcTestAppProvider;
+import com.google.devtools.build.lib.rules.platform.ConstraintSettingRule;
+import com.google.devtools.build.lib.rules.platform.ConstraintValueRule;
+import com.google.devtools.build.lib.rules.platform.PlatformRule;
 import com.google.devtools.build.lib.rules.proto.BazelProtoLibraryRule;
 import com.google.devtools.build.lib.rules.proto.ProtoConfiguration;
 import com.google.devtools.build.lib.rules.proto.ProtoLangToolchainRule;
@@ -174,16 +176,13 @@ import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.ResourceFileLoader;
 import java.io.IOException;
 
-/**
- * A rule class provider implementing the rules Bazel knows.
- */
+/** A rule class provider implementing the rules Bazel knows. */
 public class BazelRuleClassProvider {
   public static final String TOOLS_REPOSITORY = "@bazel_tools";
 
   /** Used by the build encyclopedia generator. */
   public static ConfiguredRuleClassProvider create() {
-    ConfiguredRuleClassProvider.Builder builder =
-        new ConfiguredRuleClassProvider.Builder();
+    ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
     builder.setToolsRepository(TOOLS_REPOSITORY);
     setup(builder);
     return builder.build();
@@ -191,8 +190,8 @@ public class BazelRuleClassProvider {
 
   private static class BazelPrerequisiteValidator implements PrerequisiteValidator {
     @Override
-    public void validate(RuleContext.Builder context,
-        ConfiguredTarget prerequisite, Attribute attribute) {
+    public void validate(
+        RuleContext.Builder context, ConfiguredTarget prerequisite, Attribute attribute) {
       validateDirectPrerequisiteVisibility(context, prerequisite, attribute.getName());
       validateDirectPrerequisiteForTestOnly(context, prerequisite);
       DeprecationValidator.validateDirectPrerequisiteForDeprecation(
@@ -203,21 +202,27 @@ public class BazelRuleClassProvider {
         RuleContext.Builder context, ConfiguredTarget prerequisite, String attrName) {
       Rule rule = context.getRule();
       Target prerequisiteTarget = prerequisite.getTarget();
-      if (!context.getRule().getLabel().getPackageIdentifier().equals(
-              AliasProvider.getDependencyLabel(prerequisite).getPackageIdentifier())
+      if (!context
+              .getRule()
+              .getLabel()
+              .getPackageIdentifier()
+              .equals(AliasProvider.getDependencyLabel(prerequisite).getPackageIdentifier())
           && !context.isVisible(prerequisite)) {
         if (!context.getConfiguration().checkVisibility()) {
-          context.ruleWarning(String.format("Target '%s' violates visibility of target "
-              + "%s. Continuing because --nocheck_visibility is active",
-              rule.getLabel(), AliasProvider.printLabelWithAliasChain(prerequisite)));
+          context.ruleWarning(
+              String.format(
+                  "Target '%s' violates visibility of target "
+                      + "%s. Continuing because --nocheck_visibility is active",
+                  rule.getLabel(), AliasProvider.printLabelWithAliasChain(prerequisite)));
         } else {
           // Oddly enough, we use reportError rather than ruleError here.
-          context.reportError(rule.getLocation(),
-              String.format("Target %s is not visible from target '%s'. Check "
-                  + "the visibility declaration of the former target if you think "
-                  + "the dependency is legitimate",
-                  AliasProvider.printLabelWithAliasChain(prerequisite),
-                  rule.getLabel()));
+          context.reportError(
+              rule.getLocation(),
+              String.format(
+                  "Target %s is not visible from target '%s'. Check "
+                      + "the visibility declaration of the former target if you think "
+                      + "the dependency is legitimate",
+                  AliasProvider.printLabelWithAliasChain(prerequisite), rule.getLabel()));
         }
       }
 
@@ -251,9 +256,12 @@ public class BazelRuleClassProvider {
       String thisPackage = rule.getLabel().getPackageName();
 
       if (isTestOnlyRule(prerequisiteTarget) && !isTestOnlyRule(rule)) {
-        String message = "non-test target '" + rule.getLabel() + "' depends on testonly target "
-            + AliasProvider.printLabelWithAliasChain(prerequisite)
-            + " and doesn't have testonly attribute set";
+        String message =
+            "non-test target '"
+                + rule.getLabel()
+                + "' depends on testonly target "
+                + AliasProvider.printLabelWithAliasChain(prerequisite)
+                + " and doesn't have testonly attribute set";
         if (thisPackage.startsWith("experimental/")) {
           context.ruleWarning(message);
         } else {
@@ -273,6 +281,7 @@ public class BazelRuleClassProvider {
     CORE_RULES.init(builder);
     CORE_WORKSPACE_RULES.init(builder);
     BASIC_RULES.init(builder);
+    PLATFORM_RULES.init(builder);
     PROTO_RULES.init(builder);
     SH_RULES.init(builder);
     CPP_RULES.init(builder);
@@ -331,6 +340,21 @@ public class BazelRuleClassProvider {
         @Override
         public ImmutableList<RuleSet> requires() {
           return ImmutableList.of();
+        }
+      };
+
+  public static final RuleSet PLATFORM_RULES =
+      new RuleSet() {
+        @Override
+        public void init(Builder builder) {
+          builder.addRuleDefinition(new ConstraintSettingRule());
+          builder.addRuleDefinition(new ConstraintValueRule());
+          builder.addRuleDefinition(new PlatformRule());
+        }
+
+        @Override
+        public ImmutableList<RuleSet> requires() {
+          return ImmutableList.of(CORE_RULES);
         }
       };
 
@@ -608,9 +632,6 @@ public class BazelRuleClassProvider {
               ObjcProvider.OBJC_SKYLARK_PROVIDER_NAME, ObjcProvider.class);
           builder.registerSkylarkProvider(
               XcTestAppProvider.XCTEST_APP_SKYLARK_PROVIDER_NAME, XcTestAppProvider.class);
-          builder.registerSkylarkProvider(
-              AppleDebugOutputsProvider.SKYLARK_PROVIDER.getName(),
-              AppleDebugOutputsProvider.class);
           builder.addSkylarkAccessibleTopLevels("apple_common", new AppleSkylarkCommon());
 
           builder.addConfig(ObjcCommandLineOptions.class, new ObjcConfigurationLoader());

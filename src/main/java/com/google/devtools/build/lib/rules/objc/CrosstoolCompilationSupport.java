@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules.objc;
 
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.DEFINE;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.DYNAMIC_FRAMEWORK_FILE;
+import static com.google.devtools.build.lib.rules.objc.ObjcProvider.HEADER;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.IMPORTED_LIBRARY;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.INCLUDE;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.INCLUDE_SYSTEM;
@@ -28,7 +29,9 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
@@ -36,6 +39,7 @@ import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CcLibraryHelper;
+import com.google.devtools.build.lib.rules.cpp.CcLibraryHelper.Info;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.Variables.VariablesExtension;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
@@ -69,6 +73,13 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
 
   private static final String OBJC_MODULE_FEATURE_NAME = "use_objc_modules";
   private static final String NO_ENABLE_MODULES_FEATURE_NAME = "no_enable_modules";
+  private static final String DEAD_STRIP_FEATURE_NAME = "dead_strip";
+  private static final String RUN_COVERAGE_FEATURE_NAME = "run_coverage";
+  /** Produce artifacts for coverage in llvm coverage mapping format. */
+  private static final String LLVM_COVERAGE_MAP_FORMAT = "llvm_coverage_map_format";
+  /** Produce artifacts for coverage in gcc coverage mapping format. */
+  private static final String GCC_COVERAGE_MAP_FORMAT = "gcc_coverage_map_format";
+
   private static final Iterable<String> ACTIVATED_ACTIONS =
       ImmutableList.of(
           "objc-compile",
@@ -145,8 +156,8 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
           createCcLibraryHelper(
               objcProvider, compilationArtifacts, extension.build(), ccToolchain, fdoSupport);
     }
-    
-    helper.build();
+
+    registerHeaderScanningActions(helper.build(), objcProvider, compilationArtifacts);
 
     return this;
   }
@@ -173,8 +184,7 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
         .addVariableCategory(VariableCategory.FULLY_LINK_VARIABLES)
         .build();
     CppLinkAction fullyLinkAction =
-        new CppLinkActionBuilder(
-                ruleContext, outputArchive, ccToolchain, fdoSupport.getFdoSupport())
+        new CppLinkActionBuilder(ruleContext, outputArchive, ccToolchain, fdoSupport)
             .addActionInputs(objcProvider.getObjcLibraries())
             .addActionInputs(objcProvider.getCcLibraries())
             .addActionInputs(objcProvider.get(IMPORTED_LIBRARY).toSet())
@@ -238,7 +248,7 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
     CcToolchainProvider ccToolchain = CppHelper.getToolchain(ruleContext, ":cc_toolchain");
     FdoSupportProvider fdoSupport = CppHelper.getFdoSupport(ruleContext, ":cc_toolchain");
     CppLinkAction executableLinkAction =
-        new CppLinkActionBuilder(ruleContext, binaryToLink, ccToolchain, fdoSupport.getFdoSupport())
+        new CppLinkActionBuilder(ruleContext, binaryToLink, ccToolchain, fdoSupport)
             .setMnemonic("ObjcLink")
             .addActionInputs(bazelBuiltLibraries)
             .addActionInputs(objcProvider.getCcLibraries())
@@ -250,16 +260,37 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
             .addActionInput(inputFileList)
             .setLinkType(linkType)
             .setLinkStaticness(LinkStaticness.FULLY_STATIC)
+            .addLinkopts(ImmutableList.copyOf(extraLinkArgs))
             .addVariablesExtension(extension)
             .setFeatureConfiguration(getFeatureConfiguration(ruleContext, buildConfiguration))
             .build();
     ruleContext.registerAction(executableLinkAction);    
-    
+
+    if (objcConfiguration.shouldStripBinary()) {
+      registerBinaryStripAction(binaryToLink, StrippingType.DEFAULT);
+    }
+
     return this;
   }
-  private CcLibraryHelper createCcLibraryHelper(ObjcProvider objcProvider,
-      CompilationArtifacts compilationArtifacts, VariablesExtension extension,
-      CcToolchainProvider ccToolchain, FdoSupportProvider fdoSupport) {
+
+  private IncludeProcessing createIncludeProcessing(
+      Iterable<Artifact> potentialInputs, @Nullable Artifact pchHdr) {
+    if (isHeaderThinningEnabled()) {
+      if (pchHdr != null) {
+        potentialInputs = Iterables.concat(potentialInputs, ImmutableList.of(pchHdr));
+      }
+      return new HeaderThinning(potentialInputs);
+    } else {
+      return new NoProcessing();
+    }
+  }
+
+  private CcLibraryHelper createCcLibraryHelper(
+      ObjcProvider objcProvider,
+      CompilationArtifacts compilationArtifacts,
+      VariablesExtension extension,
+      CcToolchainProvider ccToolchain,
+      FdoSupportProvider fdoSupport) {
     PrecompiledFiles precompiledFiles = new PrecompiledFiles(ruleContext);
     Collection<Artifact> arcSources = ImmutableSortedSet.copyOf(compilationArtifacts.getSrcs());
     Collection<Artifact> nonArcSources =
@@ -267,14 +298,22 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
     Collection<Artifact> privateHdrs =
         ImmutableSortedSet.copyOf(compilationArtifacts.getPrivateHdrs());
     Collection<Artifact> publicHdrs = ImmutableSortedSet.copyOf(attributes.hdrs());
-    IncludeProcessing includeProcessing = new NoProcessing();
+    Artifact pchHdr = null;
+    if (ruleContext.attributes().has("pch", BuildType.LABEL)) {
+      pchHdr = ruleContext.getPrerequisiteArtifact("pch", Mode.TARGET);
+    }
+    ObjcCppSemantics semantics =
+        new ObjcCppSemantics(
+            objcProvider,
+            createIncludeProcessing(
+                Iterables.concat(privateHdrs, publicHdrs, objcProvider.get(HEADER)), pchHdr),
+            ruleContext.getFragment(ObjcConfiguration.class),
+            isHeaderThinningEnabled(),
+            intermediateArtifacts);
     CcLibraryHelper result =
         new CcLibraryHelper(
                 ruleContext,
-                new ObjcCppSemantics(
-                    objcProvider,
-                    includeProcessing,
-                    ruleContext.getFragment(ObjcConfiguration.class)),
+                semantics,
                 getFeatureConfiguration(ruleContext, buildConfiguration),
                 CcLibraryHelper.SourceCategory.CC_AND_OBJC,
                 ccToolchain,
@@ -302,10 +341,6 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
             .setNeverLink(true)
             .addVariableExtension(extension);
 
-    Artifact pchHdr = null;
-    if (ruleContext.attributes().has("pch", BuildType.LABEL)) {
-      pchHdr = ruleContext.getPrerequisiteArtifact("pch", Mode.TARGET);
-    }
     if (pchHdr != null) {
       result.addNonModuleMapHeader(pchHdr);
     }
@@ -337,13 +372,22 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
     }
     if (!CompilationAttributes.Builder.fromRuleContext(ruleContext).build().enableModules()) {
       activatedCrosstoolSelectables.add(NO_ENABLE_MODULES_FEATURE_NAME);
-    } 
-
+    }
+    if (ruleContext.getConfiguration().getFragment(ObjcConfiguration.class).shouldStripBinary()) {
+      activatedCrosstoolSelectables.add(DEAD_STRIP_FEATURE_NAME);
+    }
     if (ruleContext.attributes().has("pch", BuildType.LABEL)
         && ruleContext.getPrerequisiteArtifact("pch", Mode.TARGET) != null) {
       activatedCrosstoolSelectables.add("pch");
     }
-
+    if (configuration.isCodeCoverageEnabled()) {
+      activatedCrosstoolSelectables.add(RUN_COVERAGE_FEATURE_NAME);
+    }
+    if (configuration.isLLVMCoverageMapFormatEnabled()) {
+      activatedCrosstoolSelectables.add(LLVM_COVERAGE_MAP_FORMAT);
+    } else {
+      activatedCrosstoolSelectables.add(GCC_COVERAGE_MAP_FORMAT);
+    }
     return configuration
         .getFragment(CppConfiguration.class)
         .getFeatures()
@@ -360,5 +404,34 @@ public class CrosstoolCompilationSupport extends CompilationSupport {
       result.add(intermediateArtifacts.objFile(nonArcSourceFile));
     }
     return result.build();
+  }
+
+  private void registerHeaderScanningActions(
+      Info info, ObjcProvider objcProvider, CompilationArtifacts compilationArtifacts) {
+    // PIC is not used for Obj-C builds, if that changes this method will need to change
+    if (!isHeaderThinningEnabled()
+        || info.getCcCompilationOutputs().getObjectFiles(false).isEmpty()) {
+      return;
+    }
+
+    ImmutableList.Builder<ObjcHeaderThinningInfo> headerThinningInfos = ImmutableList.builder();
+    AnalysisEnvironment analysisEnvironment = ruleContext.getAnalysisEnvironment();
+    for (Artifact objectFile : info.getCcCompilationOutputs().getObjectFiles(false)) {
+      ActionAnalysisMetadata generatingAction =
+          analysisEnvironment.getLocalGeneratingAction(objectFile);
+      if (generatingAction instanceof CppCompileAction) {
+        CppCompileAction action = (CppCompileAction) generatingAction;
+        Artifact sourceFile = action.getSourceFile();
+        if (!sourceFile.isTreeArtifact()
+            && SOURCES_FOR_HEADER_THINNING.matches(sourceFile.getFilename())) {
+          headerThinningInfos.add(
+              new ObjcHeaderThinningInfo(
+                  sourceFile,
+                  intermediateArtifacts.headersListFile(sourceFile),
+                  action.getCompilerOptions()));
+        }
+      }
+    }
+    registerHeaderScanningActions(headerThinningInfos.build(), objcProvider, compilationArtifacts);
   }
 }

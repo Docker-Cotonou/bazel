@@ -38,6 +38,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
 
   @VisibleForTesting
   public static final String DEFAULT_MINIMUM_IOS = "7.0";
+  public static final String DEFAULT_MINIMUM_MACOS = "10.10";
 
   @Option(
     name = "xcode_version",
@@ -117,7 +118,7 @@ public class AppleCommandLineOptions extends FragmentOptions {
 
   @Option(
       name = "macos_minimum_os",
-      defaultValue = "null",
+      defaultValue = DEFAULT_MINIMUM_MACOS,
       category = "flags",
       converter = DottedVersionConverter.class,
       help = "Minimum compatible macOS version for targets."
@@ -277,6 +278,14 @@ public class AppleCommandLineOptions extends FragmentOptions {
     help = "If true, the apple crosstool is used for all apple rules."
   )
   public boolean enableAppleCrosstoolTransition;
+
+  @Option(
+    name = "target_uses_apple_crosstool",
+    defaultValue = "false",
+    category = "undocumented",
+    help = "If true, this target uses the apple crosstool.  Do not set this flag manually."
+  )
+  public boolean targetUsesAppleCrosstool;
 
   private Platform getPlatform() {
     for (String architecture : iosMultiCpus) {

@@ -38,7 +38,6 @@ using std::wstring;
 
 // Methods defined in file_windows.cc that are only visible for testing.
 bool AsWindowsPath(const string& path, wstring* result);
-bool AsWindowsPathWithUncPrefix(const string& path, wstring* wpath);
 void ResetMsysRootForTesting();
 string NormalizeWindowsPath(string path);
 
@@ -243,6 +242,19 @@ TEST_F(FileWindowsTest, TestAsShortWindowsPath) {
   ASSERT_TRUE(AsShortWindowsPath("nul", &actual));
   ASSERT_EQ(string("NUL"), actual);
 
+  ASSERT_TRUE(AsShortWindowsPath("C://", &actual));
+  ASSERT_EQ(string("c:\\"), actual);
+  ASSERT_TRUE(AsShortWindowsPath("/C//", &actual));
+  ASSERT_EQ(string("c:\\"), actual);
+
+  // The A drive usually doesn't exist but AsShortWindowsPath should still work.
+  // Here we even have multiple trailing slashes, that should be handled too.
+  ASSERT_TRUE(AsShortWindowsPath("A://", &actual));
+  ASSERT_EQ(string("a:\\"), actual);
+  ASSERT_TRUE(AsShortWindowsPath("/A//", &actual));
+  ASSERT_EQ(string("a:\\"), actual);
+
+  // Assert that we can shorten the TEST_TMPDIR.
   string tmpdir;
   GET_TEST_TMPDIR(tmpdir);
   string short_tmpdir;
@@ -250,12 +262,26 @@ TEST_F(FileWindowsTest, TestAsShortWindowsPath) {
   ASSERT_LT(0, short_tmpdir.size());
   ASSERT_TRUE(PathExists(short_tmpdir));
 
+  // Assert that a trailing "/" doesn't change the shortening logic and it will
+  // be stripped from the result.
+  ASSERT_TRUE(AsShortWindowsPath(tmpdir + "/", &actual));
+  ASSERT_EQ(actual, short_tmpdir);
+  ASSERT_NE(actual.back(), '/');
+  ASSERT_NE(actual.back(), '\\');
+
+  // Assert shortening another long path, and that the result is lowercased.
   string dirname(JoinPath(short_tmpdir, "LONGpathNAME"));
   ASSERT_EQ(0, mkdir(dirname.c_str()));
   ASSERT_TRUE(PathExists(dirname));
-
   ASSERT_TRUE(AsShortWindowsPath(dirname, &actual));
   ASSERT_EQ(short_tmpdir + "\\longpa~1", actual);
+
+  // Assert shortening non-existent paths.
+  ASSERT_TRUE(AsShortWindowsPath(JoinPath(tmpdir, "NonExistent/FOO"), &actual));
+  ASSERT_EQ(short_tmpdir + "\\nonexistent\\foo", actual);
+  // Assert shortening non-existent root paths.
+  ASSERT_TRUE(AsShortWindowsPath("/c/NonExistent/FOO", &actual));
+  ASSERT_EQ("c:\\nonexistent\\foo", actual);
 }
 
 TEST_F(FileWindowsTest, TestMsysRootRetrieval) {
@@ -394,9 +420,9 @@ TEST_F(FileWindowsTest, TestMakeDirectories) {
   // Test that we can create come directories, can't create others.
   ASSERT_FALSE(MakeDirectories("", 0777));
   ASSERT_FALSE(MakeDirectories("/dev/null", 0777));
-  ASSERT_FALSE(MakeDirectories("c:/", 0777));
-  ASSERT_FALSE(MakeDirectories("c:\\", 0777));
-  ASSERT_FALSE(MakeDirectories("/", 0777));
+  ASSERT_TRUE(MakeDirectories("c:/", 0777));
+  ASSERT_TRUE(MakeDirectories("c:\\", 0777));
+  ASSERT_TRUE(MakeDirectories("/", 0777));
   ASSERT_TRUE(MakeDirectories("/foo", 0777));
   ASSERT_TRUE(MakeDirectories(".", 0777));
   ASSERT_TRUE(MakeDirectories(tmpdir, 0777));

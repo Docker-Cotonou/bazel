@@ -11,8 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include "src/main/cpp/util/file_platform.h"
-
 #include <ctype.h>  // isalpha
 #include <wchar.h>  // wcslen
 #include <wctype.h>  // iswalpha
@@ -103,10 +101,14 @@ static bool HasDriveSpecifierPrefix(const char_type* ch) {
   return CharTraits<char_type>::IsAlpha(ch[0]) && ch[1] == ':';
 }
 
-static void AddUncPrefixMaybe(wstring* path) {
-  if (path->size() >= MAX_PATH && !HasUncPrefix(path->c_str())) {
+static void AddUncPrefixMaybe(wstring* path, size_t max_path = MAX_PATH) {
+  if (path->size() >= max_path && !HasUncPrefix(path->c_str())) {
     *path = wstring(L"\\\\?\\") + *path;
   }
+}
+
+static const wchar_t* RemoveUncPrefixMaybe(const wchar_t* ptr) {
+  return ptr + (windows_util::HasUncPrefix(ptr) ? 4 : 0);
 }
 
 class WindowsPipe : public IPipe {
@@ -122,11 +124,14 @@ class WindowsPipe : public IPipe {
                        NULL) == TRUE;
   }
 
-  int Receive(void* buffer, int size) override {
+  int Receive(void* buffer, int size, int* error) override {
     DWORD actually_read = 0;
-    return ::ReadFile(_read_handle, buffer, size, &actually_read, NULL)
-               ? actually_read
-               : -1;
+    BOOL result = ::ReadFile(_read_handle, buffer, size, &actually_read, NULL);
+    if (error != nullptr) {
+      // TODO(laszlocsomor): handle the error mode that is errno=EINTR on Linux.
+      *error = result ? IPipe::SUCCESS : IPipe::OTHER_ERROR;
+    }
+    return result ? actually_read : -1;
   }
 
  private:
@@ -478,7 +483,8 @@ bool AsWindowsPath(const string& path, wstring* result) {
   return true;
 }
 
-bool AsWindowsPathWithUncPrefix(const string& path, wstring* wpath) {
+bool AsWindowsPathWithUncPrefix(const string& path, wstring* wpath,
+                                size_t max_path) {
   if (IsDevNull(path)) {
     wpath->assign(L"NUL");
     return true;
@@ -492,7 +498,7 @@ bool AsWindowsPathWithUncPrefix(const string& path, wstring* wpath) {
   if (!IsAbsolute(path)) {
     wpath->assign(wstring(GetCwdW().get()) + L"\\" + *wpath);
   }
-  AddUncPrefixMaybe(wpath);
+  AddUncPrefixMaybe(wpath, max_path);
   return true;
 }
 
@@ -504,64 +510,132 @@ bool AsShortWindowsPath(const string& path, string* result) {
 
   result->clear();
   wstring wpath;
+  wstring wsuffix;
   if (!AsWindowsPathWithUncPrefix(path, &wpath)) {
     return false;
   }
   DWORD size = ::GetShortPathNameW(wpath.c_str(), nullptr, 0);
   if (size == 0) {
-    return false;
+    // GetShortPathNameW can fail if `wpath` does not exist. This is expected
+    // when we are about to create a file at that path, so instead of failing,
+    // walk up in the path until we find a prefix that exists and can be
+    // shortened, or is a root directory. Save the non-existent tail in
+    // `wsuffix`, we'll add it back later.
+    std::vector<wstring> segments;
+    while (size == 0 && !IsRootDirectoryW(wpath)) {
+      pair<wstring, wstring> split = SplitPathW(wpath);
+      wpath = split.first;
+      segments.push_back(split.second);
+      size = ::GetShortPathNameW(wpath.c_str(), nullptr, 0);
+    }
+
+    // Join all segments.
+    std::wostringstream builder;
+    bool first = true;
+    for (auto it = segments.crbegin(); it != segments.crend(); ++it) {
+      if (!first || !IsRootDirectoryW(wpath)) {
+        builder << L'\\' << *it;
+      } else {
+        builder << *it;
+      }
+      first = false;
+    }
+    wsuffix = builder.str();
   }
 
-  unique_ptr<WCHAR[]> wshort(new WCHAR[size]);  // size includes null-terminator
-  if (size - 1 != ::GetShortPathNameW(wpath.c_str(), wshort.get(), size)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "AsShortWindowsPath(%s): GetShortPathNameW(%S) failed, err=%d",
-         path.c_str(), wpath.c_str(), GetLastError());
+  wstring wresult;
+  if (IsRootDirectoryW(wpath)) {
+    // Strip the UNC prefix from `wpath`, and the leading "\" from `wsuffix`.
+    wresult = wstring(RemoveUncPrefixMaybe(wpath.c_str())) + wsuffix;
+  } else {
+    unique_ptr<WCHAR[]> wshort(
+        new WCHAR[size]);  // size includes null-terminator
+    if (size - 1 != ::GetShortPathNameW(wpath.c_str(), wshort.get(), size)) {
+      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+           "AsShortWindowsPath(%s): GetShortPathNameW(%S) failed, err=%d",
+           path.c_str(), wpath.c_str(), GetLastError());
+    }
+    // GetShortPathNameW may preserve the UNC prefix in the result, so strip it.
+    wresult = wstring(RemoveUncPrefixMaybe(wshort.get())) + wsuffix;
   }
-  // GetShortPathNameW may preserve the UNC prefix in the result, so strip it.
-  WCHAR* result_ptr = wshort.get() + (HasUncPrefix(wshort.get()) ? 4 : 0);
 
-  result->assign(WstringToCstring(result_ptr).get());
+  result->assign(WstringToCstring(wresult.c_str()).get());
   ToLower(result);
   return true;
 }
 
-bool ReadFile(const string& filename, string* content, int max_size) {
+static bool OpenFileForReading(const string& filename, HANDLE* result) {
   if (filename.empty()) {
     return false;
   }
   if (IsDevNull(filename)) {
-    content->clear();
     return true;
   }
   wstring wfilename;
   if (!AsWindowsPathWithUncPrefix(filename, &wfilename)) {
     return false;
   }
-  windows_util::AutoHandle handle(::CreateFileW(
+  *result = ::CreateFileW(
       /* lpFileName */ wfilename.c_str(),
       /* dwDesiredAccess */ GENERIC_READ,
       /* dwShareMode */ FILE_SHARE_READ,
       /* lpSecurityAttributes */ NULL,
       /* dwCreationDisposition */ OPEN_EXISTING,
       /* dwFlagsAndAttributes */ FILE_ATTRIBUTE_NORMAL,
-      /* hTemplateFile */ NULL));
-  if (!handle.IsValid()) {
+      /* hTemplateFile */ NULL);
+  return true;
+}
+
+int ReadFromHandle(file_handle_type handle, void* data, size_t size,
+                   int* error) {
+  DWORD actually_read = 0;
+  bool success = ::ReadFile(handle, data, size, &actually_read, NULL);
+  if (error != nullptr) {
+    // TODO(laszlocsomor): handle the error cases that are errno=EINTR and
+    // errno=EAGAIN on Linux.
+    *error = success ? ReadFileResult::SUCCESS : ReadFileResult::OTHER_ERROR;
+  }
+  return success ? actually_read : -1;
+}
+
+bool ReadFile(const string& filename, string* content, int max_size) {
+  if (IsDevNull(filename)) {
+    // mimic read(2) behavior: we can always read 0 bytes from /dev/null
+    content->clear();
+    return true;
+  }
+  HANDLE handle;
+  if (!OpenFileForReading(filename, &handle)) {
     return false;
   }
 
-  HANDLE h = handle;
-  bool result = ReadFrom(
-      [h](void* buf, int len) {
-        DWORD actually_read = 0;
-        ::ReadFile(h, buf, len, &actually_read, NULL);
-        return actually_read;
-      },
-      content, max_size);
-  return result;
+  windows_util::AutoHandle autohandle(handle);
+  if (!autohandle.IsValid()) {
+    return false;
+  }
+  content->clear();
+  return ReadFrom(handle, content, max_size);
 }
 
-bool WriteFile(const void* data, size_t size, const string& filename) {
+bool ReadFile(const string& filename, void* data, size_t size) {
+  if (IsDevNull(filename)) {
+    // mimic read(2) behavior: we can always read 0 bytes from /dev/null
+    return true;
+  }
+  HANDLE handle;
+  if (!OpenFileForReading(filename, &handle)) {
+    return false;
+  }
+
+  windows_util::AutoHandle autohandle(handle);
+  if (!autohandle.IsValid()) {
+    return false;
+  }
+  return ReadFrom(handle, data, size);
+}
+
+bool WriteFile(const void* data, size_t size, const string& filename,
+               unsigned int perm) {
   if (IsDevNull(filename)) {
     return true;  // mimic write(2) behavior with /dev/null
   }
@@ -583,15 +657,25 @@ bool WriteFile(const void* data, size_t size, const string& filename) {
     return false;
   }
 
-  HANDLE h = handle;
-  bool result = WriteTo(
-      [h](const void* buf, size_t bufsize) {
-        DWORD actually_written = 0;
-        ::WriteFile(h, buf, bufsize, &actually_written, NULL);
-        return actually_written;
-      },
-      data, size);
-  return result;
+  // TODO(laszlocsomor): respect `perm` and set the file permissions accordingly
+  DWORD actually_written = 0;
+  ::WriteFile(handle, data, size, &actually_written, NULL);
+  return actually_written == size;
+}
+
+int WriteToStdOutErr(const void* data, size_t size, bool to_stdout) {
+  DWORD written = 0;
+  HANDLE h = ::GetStdHandle(to_stdout ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+  if (h == INVALID_HANDLE_VALUE) {
+    return WriteResult::OTHER_ERROR;
+  }
+
+  if (::WriteFile(h, data, size, &written, NULL)) {
+    return (written == size) ? WriteResult::SUCCESS : WriteResult::OTHER_ERROR;
+  } else {
+    return (GetLastError() == ERROR_NO_DATA) ? WriteResult::BROKEN_PIPE
+                                             : WriteResult::OTHER_ERROR;
+  }
 }
 
 int RenameDirectory(const std::string& old_name, const std::string& new_name) {
@@ -873,9 +957,7 @@ string MakeCanonical(const char* path) {
   size_t size = wcslen(long_realpath.get()) -
                 (windows_util::HasUncPrefix(long_realpath.get()) ? 4 : 0);
   unique_ptr<WCHAR[]> lcase_realpath(new WCHAR[size + 1]);
-  const WCHAR* p_from =
-      long_realpath.get() +
-      (windows_util::HasUncPrefix(long_realpath.get()) ? 4 : 0);
+  const WCHAR* p_from = RemoveUncPrefixMaybe(long_realpath.get());
   WCHAR* p_to = lcase_realpath.get();
   while (size-- > 0) {
     *p_to++ = towlower(*p_from++);
@@ -1035,11 +1117,13 @@ static bool MakeDirectoriesW(const wstring& path) {
 bool MakeDirectories(const string& path, unsigned int mode) {
   // TODO(laszlocsomor): respect `mode` to the extent that it's possible on
   // Windows; it's currently ignored.
-  if (path.empty() || IsDevNull(path) || IsRootDirectory(path)) {
+  if (path.empty() || IsDevNull(path)) {
     return false;
   }
   wstring wpath;
-  if (!AsWindowsPathWithUncPrefix(path, &wpath)) {
+  // According to MSDN, CreateDirectory's limit without the UNC prefix is
+  // 248 characters (so it could fit another filename before reaching MAX_PATH).
+  if (!AsWindowsPathWithUncPrefix(path, &wpath, 248)) {
     return false;
   }
   return MakeDirectoriesW(wpath);
@@ -1055,9 +1139,7 @@ static unique_ptr<WCHAR[]> GetCwdW() {
 }
 
 string GetCwd() {
-  unique_ptr<WCHAR[]> cwd(GetCwdW());
-  return string(
-      WstringToCstring(cwd.get() + (HasUncPrefix(cwd.get()) ? 4 : 0)).get());
+  return string(WstringToCstring(RemoveUncPrefixMaybe(GetCwdW().get())).get());
 }
 
 bool ChangeDirectory(const string& path) {

@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSet.Builder;
+import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionStatusMessage;
@@ -37,7 +38,7 @@ public final class SandboxHelpers {
 
   static void fallbackToNonSandboxedExecution(
       Spawn spawn, ActionExecutionContext actionExecutionContext, Executor executor)
-      throws ExecException {
+      throws ExecException, InterruptedException {
     StandaloneSpawnStrategy standaloneStrategy =
         Preconditions.checkNotNull(executor.getContext(StandaloneSpawnStrategy.class));
     standaloneStrategy.exec(spawn, actionExecutionContext);
@@ -51,10 +52,6 @@ public final class SandboxHelpers {
 
   public static ImmutableSet<PathFragment> getOutputFiles(Spawn spawn) {
     Builder<PathFragment> outputFiles = ImmutableSet.builder();
-    for (PathFragment optionalOutput : spawn.getOptionalOutputFiles()) {
-      Preconditions.checkArgument(!optionalOutput.isAbsolute());
-      outputFiles.add(optionalOutput);
-    }
     for (ActionInput output : spawn.getOutputFiles()) {
       outputFiles.add(new PathFragment(output.getExecPathString()));
     }
@@ -81,10 +78,8 @@ public final class SandboxHelpers {
     return true;
   }
 
-  static void postActionStatusMessage(Executor executor, Spawn spawn) {
-    executor
-        .getEventBus()
-        .post(ActionStatusMessage.runningStrategy(spawn.getResourceOwner(), "sandbox"));
+  static void postActionStatusMessage(EventBus eventBus, Spawn spawn) {
+    eventBus.post(ActionStatusMessage.runningStrategy(spawn.getResourceOwner(), "sandbox"));
   }
 
   static Path getSandboxRoot(

@@ -83,6 +83,8 @@ public class VanillaJavaBuilderTest {
     VanillaJavaBuilderResult result =
         run(
             ImmutableList.of(
+                "--javacopts",
+                "-Xep:FallThrough:ERROR",
                 "--sources",
                 source.toString(),
                 "--source_jars",
@@ -113,12 +115,23 @@ public class VanillaJavaBuilderTest {
         source,
         ImmutableList.of(
             "class A {", //
-            "}}"),
+            "  void f(int x) {",
+            "    switch (x) {",
+            "      case 0:",
+            "        System.err.println(0);",
+            "      case 1:",
+            "        System.err.println(0);",
+            "    }",
+            "  }",
+            "}"),
         UTF_8);
 
     VanillaJavaBuilderResult result =
         run(
             ImmutableList.of(
+                "--javacopts",
+                "-Xlint:all",
+                "-Werror",
                 "--sources",
                 source.toString(),
                 "--output",
@@ -128,7 +141,45 @@ public class VanillaJavaBuilderTest {
                 "--classdir",
                 temporaryFolder.newFolder().toString()));
 
-    assertThat(result.output()).contains("class, interface, or enum expected");
+    assertThat(result.output()).contains("possible fall-through");
+    assertThat(result.ok()).isFalse();
+    assertThat(Files.exists(output)).isFalse();
+  }
+
+  @Test
+  public void diagnosticWithoutSource() throws Exception {
+    Path source = temporaryFolder.newFile("Test.java").toPath();
+    Path output = temporaryFolder.newFolder().toPath().resolve("out.jar");
+    Files.write(
+        source,
+        ImmutableList.of(
+            "import java.util.ArrayList;",
+            "import java.util.List;",
+            "abstract class A {",
+            "  abstract void f(List<String> xs);",
+            "  {",
+            "    f(new ArrayList<>());",
+            "  }",
+            "}"),
+        UTF_8);
+
+    VanillaJavaBuilderResult result =
+        run(
+            ImmutableList.of(
+                "--javacopts",
+                "-source",
+                "7",
+                "-Xlint:none",
+                "--sources",
+                source.toString(),
+                "--output",
+                output.toString(),
+                "--bootclasspath",
+                Paths.get(System.getProperty("java.home")).resolve("lib/rt.jar").toString(),
+                "--classdir",
+                temporaryFolder.newFolder().toString()));
+
+    assertThat(result.output()).contains("note: Some messages have been simplified");
     assertThat(result.ok()).isFalse();
     assertThat(Files.exists(output)).isFalse();
   }

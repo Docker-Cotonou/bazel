@@ -226,7 +226,7 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   /**
    * Specifies the circumstances under which a CROSSTOOL is used for objc in this configuration.
    */
-  enum ObjcCrosstoolMode {
+  public enum ObjcCrosstoolMode {
     /** The CROSSTOOL is used for all objc compile, archive, and link actions. */
     ALL,
 
@@ -304,6 +304,17 @@ public class ObjcCommandLineOptions extends FragmentOptions {
             + "file."
   )
   public Label objcHeaderScannerTool;
+
+  @Option(
+    name = "apple_sdk",
+    defaultValue = "null",
+    category = "undocumented",
+    converter = LabelConverter.class,
+    help =
+        "Location of target that will provide the appropriate Apple SDK for the current build "
+            + "configuration."
+  )
+  public Label appleSdk;
 
   @Override
   public FragmentOptions getHost(boolean fallback) {

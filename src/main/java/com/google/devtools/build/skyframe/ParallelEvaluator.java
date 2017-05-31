@@ -22,7 +22,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.util.BlazeClock;
@@ -100,7 +100,7 @@ public final class ParallelEvaluator implements Evaluator {
       ProcessableGraph graph,
       Version graphVersion,
       ImmutableMap<SkyFunctionName, ? extends SkyFunction> skyFunctions,
-      final EventHandler reporter,
+      final ExtendedEventHandler reporter,
       EmittedEventState emittedEventState,
       EventFilter storedEventFilter,
       boolean keepGoing,
@@ -127,7 +127,7 @@ public final class ParallelEvaluator implements Evaluator {
       ProcessableGraph graph,
       Version graphVersion,
       ImmutableMap<SkyFunctionName, ? extends SkyFunction> skyFunctions,
-      final EventHandler reporter,
+      final ExtendedEventHandler reporter,
       EmittedEventState emittedEventState,
       EventFilter storedEventFilter,
       boolean keepGoing,
@@ -262,8 +262,9 @@ public final class ParallelEvaluator implements Evaluator {
             // usual, but we can't, because then the ErrorTransienceValue would remain as a dep,
             // which would be incorrect if, for instance, the value re-evaluated to a non-error.
             state.forceRebuild();
-            graph.get(
-                skyKey, Reason.RDEP_REMOVAL, ErrorTransienceValue.KEY).removeReverseDep(skyKey);
+            graph
+                .get(skyKey, Reason.RDEP_REMOVAL, ErrorTransienceValue.KEY)
+                .removeReverseDep(skyKey);
             return DirtyOutcome.NEEDS_EVALUATION;
           }
           if (!evaluatorContext.keepGoing()) {
@@ -307,14 +308,20 @@ public final class ParallelEvaluator implements Evaluator {
           // always the last dep).
           state.addTemporaryDirectDepsGroupToDirtyEntry(directDepsToCheck);
 
-          // TODO(bazel-team): If this signals the current node, consider falling through to the
-          // VERIFIED_CLEAN case below directly, without scheduling a new Evaluate().
-          for (Map.Entry<SkyKey, ? extends NodeEntry> e :
-              graph
-                  .createIfAbsentBatch(skyKey, Reason.ENQUEUING_CHILD, directDepsToCheck)
-                  .entrySet()) {
+          Map<SkyKey, ? extends NodeEntry> oldChildren =
+              graph.getBatch(skyKey, Reason.ENQUEUING_CHILD, directDepsToCheck);
+          Preconditions.checkState(
+              oldChildren.size() == directDepsToCheck.size(),
+              "Not all old children were present: %s %s %s %s",
+              skyKey,
+              state,
+              directDepsToCheck,
+              oldChildren);
+          for (Map.Entry<SkyKey, ? extends NodeEntry> e : oldChildren.entrySet()) {
             SkyKey directDep = e.getKey();
             NodeEntry directDepEntry = e.getValue();
+            // TODO(bazel-team): If this signals the current node, consider falling through to the
+            // VERIFIED_CLEAN case below directly, without scheduling a new Evaluate().
             enqueueChild(skyKey, state, directDep, directDepEntry, /*depAlreadyExists=*/ true);
           }
           return DirtyOutcome.ALREADY_PROCESSED;

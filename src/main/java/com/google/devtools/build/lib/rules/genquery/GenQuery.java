@@ -39,7 +39,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
@@ -55,7 +55,6 @@ import com.google.devtools.build.lib.query2.engine.DigraphQueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Setting;
 import com.google.devtools.build.lib.query2.engine.QueryException;
-import com.google.devtools.build.lib.query2.engine.QueryExpressionEvalListener;
 import com.google.devtools.build.lib.query2.engine.QueryUtil;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.AggregateAllOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.engine.SkyframeRestartQueryException;
@@ -192,7 +191,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
    * DO NOT USE! We should get rid of this method: errors reported directly to this object don't set
    * the error flag in {@link ConfiguredTarget}.
    */
-  private EventHandler getEventHandler(RuleContext ruleContext) {
+  private ExtendedEventHandler getEventHandler(RuleContext ruleContext) {
     return ruleContext.getAnalysisEnvironment().getEventHandler();
   }
 
@@ -284,7 +283,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     DigraphQueryEvalResult<Target> queryResult;
     OutputFormatter formatter;
     AggregateAllOutputFormatterCallback<Target> targets =
-        QueryUtil.newAggregateAllOutputFormatterCallback();
+        QueryUtil.newOrderedAggregateAllOutputFormatterCallback();
     try {
       Set<Setting> settings = queryOptions.toSettings();
 
@@ -305,21 +304,25 @@ public class GenQuery implements RuleConfiguredTargetFactory {
       // All the packages are already loaded at this point, so there is no need
       // to start up many threads. 4 are started up to make good use of multiple
       // cores.
-      BlazeQueryEnvironment queryEnvironment = (BlazeQueryEnvironment) QUERY_ENVIRONMENT_FACTORY
-          .create(
-              /*transitivePackageLoader=*/null, /*graph=*/null, packageProvider,
-              evaluator,
-              /*keepGoing=*/false,
-              ruleContext.attributes().get("strict", Type.BOOLEAN),
-              /*orderedResults=*/!QueryOutputUtils.shouldStreamResults(queryOptions, formatter),
-              /*universeScope=*/ImmutableList.<String>of(),
-              /*loadingPhaseThreads=*/4,
-              labelFilter,
-              getEventHandler(ruleContext),
-              settings,
-              ImmutableList.<QueryFunction>of(),
-              QueryExpressionEvalListener.NullListener.<Target>instance(),
-              /*packagePath=*/null);
+      BlazeQueryEnvironment queryEnvironment =
+          (BlazeQueryEnvironment)
+              QUERY_ENVIRONMENT_FACTORY.create(
+                  /*transitivePackageLoader=*/ null,
+                  /*graph=*/ null,
+                  packageProvider,
+                  evaluator,
+                  /*keepGoing=*/ false,
+                  ruleContext.attributes().get("strict", Type.BOOLEAN),
+                  /*orderedResults=*/ !QueryOutputUtils.shouldStreamResults(
+                      queryOptions, formatter),
+                  /*universeScope=*/ ImmutableList.<String>of(),
+                  /*loadingPhaseThreads=*/ 4,
+                  labelFilter,
+                  getEventHandler(ruleContext),
+                  settings,
+                  ImmutableList.<QueryFunction>of(),
+                  /*packagePath=*/ null,
+                  /*blockUniverseEvaluationErrors=*/ false);
       queryResult = (DigraphQueryEvalResult<Target>) queryEnvironment.evaluateQuery(query, targets);
     } catch (SkyframeRestartQueryException e) {
       // Do not emit errors for skyframe restarts. They make output of the ConfiguredTargetFunction
@@ -396,7 +399,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
     @Override
     public Map<String, ResolvedTargets<Target>> preloadTargetPatterns(
-        EventHandler eventHandler, Collection<String> patterns, boolean keepGoing)
+        ExtendedEventHandler eventHandler, Collection<String> patterns, boolean keepGoing)
         throws TargetParsingException, InterruptedException {
       Preconditions.checkArgument(!keepGoing);
       boolean ok = true;
@@ -481,16 +484,18 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     }
 
     @Override
-    public ResolvedTargets<Target> parseTargetPatternList(EventHandler eventHandler,
-                                                          List<String> targetPatterns,
-                                                          FilteringPolicy policy, boolean keepGoing)
+    public ResolvedTargets<Target> parseTargetPatternList(
+        ExtendedEventHandler eventHandler,
+        List<String> targetPatterns,
+        FilteringPolicy policy,
+        boolean keepGoing)
         throws TargetParsingException {
       throw new UnsupportedOperationException();
     }
 
     @Override
-    public ResolvedTargets<Target> parseTargetPattern(EventHandler eventHandler, String pattern,
-                                                      boolean keepGoing)
+    public ResolvedTargets<Target> parseTargetPattern(
+        ExtendedEventHandler eventHandler, String pattern, boolean keepGoing)
         throws TargetParsingException {
       throw new UnsupportedOperationException();
     }
@@ -521,7 +526,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     }
 
     @Override
-    public Package getPackage(EventHandler eventHandler, PackageIdentifier packageId)
+    public Package getPackage(ExtendedEventHandler eventHandler, PackageIdentifier packageId)
         throws NoSuchPackageException {
       Package pkg = pkgMap.get(packageId);
       if (pkg != null) {
@@ -532,7 +537,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     }
 
     @Override
-    public Target getTarget(EventHandler eventHandler, Label label)
+    public Target getTarget(ExtendedEventHandler eventHandler, Label label)
         throws NoSuchPackageException, NoSuchTargetException {
       // Try to perform only one map lookup in the common case.
       Target target = labelToTarget.get(label);
@@ -545,7 +550,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     }
 
     @Override
-    public boolean isPackage(EventHandler eventHandler, PackageIdentifier packageName) {
+    public boolean isPackage(ExtendedEventHandler eventHandler, PackageIdentifier packageName) {
       throw new UnsupportedOperationException();
     }
   }

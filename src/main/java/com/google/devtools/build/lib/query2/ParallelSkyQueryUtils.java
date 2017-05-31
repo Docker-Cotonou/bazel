@@ -36,10 +36,10 @@ import com.google.devtools.build.lib.concurrent.QuiescingExecutor;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.query2.engine.Callback;
+import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryTaskFuture;
 import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
-import com.google.devtools.build.lib.query2.engine.ThreadSafeCallback;
-import com.google.devtools.build.lib.query2.engine.ThreadSafeUniquifier;
+import com.google.devtools.build.lib.query2.engine.Uniquifier;
 import com.google.devtools.build.lib.query2.engine.VariableContext;
 import com.google.devtools.build.lib.skyframe.PackageValue;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
@@ -77,14 +77,13 @@ class ParallelSkyQueryUtils {
    * Specialized parallel variant of {@link SkyQueryEnvironment#getAllRdeps} that is appropriate
    * when there is no depth-bound.
    */
-  static void getAllRdepsUnboundedParallel(
+  static QueryTaskFuture<Void> getAllRdepsUnboundedParallel(
       SkyQueryEnvironment env,
       QueryExpression expression,
       VariableContext<Target> context,
-      ThreadSafeCallback<Target> callback,
-      MultisetSemaphore<PackageIdentifier> packageSemaphore)
-          throws QueryException, InterruptedException {
-    env.eval(
+      Callback<Target> callback,
+      MultisetSemaphore<PackageIdentifier> packageSemaphore) {
+    return env.eval(
         expression,
         context,
         new SkyKeyBFSVisitorCallback(
@@ -95,10 +94,10 @@ class ParallelSkyQueryUtils {
   static void getRBuildFilesParallel(
       SkyQueryEnvironment env,
       Collection<PathFragment> fileIdentifiers,
-      ThreadSafeCallback<Target> callback,
+      Callback<Target> callback,
       MultisetSemaphore<PackageIdentifier> packageSemaphore)
           throws QueryException, InterruptedException {
-    ThreadSafeUniquifier<SkyKey> keyUniquifier = env.createSkyKeyUniquifier();
+    Uniquifier<SkyKey> keyUniquifier = env.createSkyKeyUniquifier();
     RBuildFilesVisitor visitor =
         new RBuildFilesVisitor(env, keyUniquifier, callback, packageSemaphore);
     visitor.visitAndWaitForCompletion(env.getSkyKeysForFileFragments(fileIdentifiers));
@@ -110,7 +109,7 @@ class ParallelSkyQueryUtils {
 
     private RBuildFilesVisitor(
         SkyQueryEnvironment env,
-        ThreadSafeUniquifier<SkyKey> uniquifier,
+        Uniquifier<SkyKey> uniquifier,
         Callback<Target> callback,
         MultisetSemaphore<PackageIdentifier> packageSemaphore) {
       super(env, uniquifier, callback);
@@ -180,8 +179,8 @@ class ParallelSkyQueryUtils {
 
     private AllRdepsUnboundedVisitor(
         SkyQueryEnvironment env,
-        ThreadSafeUniquifier<Pair<SkyKey, SkyKey>> uniquifier,
-        ThreadSafeCallback<Target> callback,
+        Uniquifier<Pair<SkyKey, SkyKey>> uniquifier,
+        Callback<Target> callback,
         MultisetSemaphore<PackageIdentifier> packageSemaphore) {
       super(env, uniquifier, callback);
       this.packageSemaphore = packageSemaphore;
@@ -190,19 +189,18 @@ class ParallelSkyQueryUtils {
     /**
      * A {@link Factory} for {@link AllRdepsUnboundedVisitor} instances, each of which will be used
      * to perform visitation of the reverse transitive closure of the {@link Target}s passed in a
-     * single {@link ThreadSafeCallback#process} call. Note that all the created
-     * instances share the same {@code ThreadSafeUniquifier<SkyKey>} so that we don't visit the
-     * same Skyframe node more than once.
+     * single {@link Callback#process} call. Note that all the created instances share the same
+     * {@link Uniquifier} so that we don't visit the same Skyframe node more than once.
      */
     private static class Factory implements AbstractSkyKeyBFSVisitor.Factory {
       private final SkyQueryEnvironment env;
-      private final ThreadSafeUniquifier<Pair<SkyKey, SkyKey>> uniquifier;
-      private final ThreadSafeCallback<Target> callback;
+      private final Uniquifier<Pair<SkyKey, SkyKey>> uniquifier;
+      private final Callback<Target> callback;
       private final MultisetSemaphore<PackageIdentifier> packageSemaphore;
 
       private Factory(
         SkyQueryEnvironment env,
-        ThreadSafeCallback<Target> callback,
+        Callback<Target> callback,
         MultisetSemaphore<PackageIdentifier> packageSemaphore) {
         this.env = env;
         this.uniquifier = env.createReverseDepSkyKeyUniquifier();
@@ -341,10 +339,10 @@ class ParallelSkyQueryUtils {
   }
 
   /**
-   * A {@link ThreadSafeCallback} whose {@link ThreadSafeCallback#process} method kicks off a BFS
-   * visitation via a fresh {@link AbstractSkyKeyBFSVisitor} instance.
+   * A {@link Callback} whose {@link Callback#process} method kicks off a BFS visitation via a fresh
+   * {@link AbstractSkyKeyBFSVisitor} instance.
    */
-  private static class SkyKeyBFSVisitorCallback implements ThreadSafeCallback<Target> {
+  private static class SkyKeyBFSVisitorCallback implements Callback<Target> {
     private final AbstractSkyKeyBFSVisitor.Factory visitorFactory;
 
     private SkyKeyBFSVisitorCallback(AbstractSkyKeyBFSVisitor.Factory visitorFactory) {
@@ -355,6 +353,8 @@ class ParallelSkyQueryUtils {
     public void process(Iterable<Target> partialResult)
         throws QueryException, InterruptedException {
       AbstractSkyKeyBFSVisitor<?> visitor = visitorFactory.create();
+      // TODO(nharmata): It's not ideal to have an operation like this in #process that blocks on
+      // another, potentially expensive computation. Refactor to something like "processAsync".
       visitor.visitAndWaitForCompletion(
           SkyQueryEnvironment.makeTransitiveTraversalKeysStrict(partialResult));
     }
@@ -370,10 +370,10 @@ class ParallelSkyQueryUtils {
   @ThreadSafe
   private abstract static class AbstractSkyKeyBFSVisitor<T> {
     protected final SkyQueryEnvironment env;
-    private final ThreadSafeUniquifier<T> uniquifier;
+    private final Uniquifier<T> uniquifier;
     private final Callback<Target> callback;
 
-    private final QuiescingExecutor executor;
+    private final BFSVisitingTaskExecutor executor;
 
     /** A queue to store pending visits. */
     private final LinkedBlockingQueue<T> processingQueue = new LinkedBlockingQueue<>();
@@ -434,18 +434,13 @@ class ParallelSkyQueryUtils {
             new ThreadFactoryBuilder().setNameFormat("skykey-bfs-visitor %d").build());
 
     private AbstractSkyKeyBFSVisitor(
-        SkyQueryEnvironment env, ThreadSafeUniquifier<T> uniquifier, Callback<Target> callback) {
+        SkyQueryEnvironment env, Uniquifier<T> uniquifier, Callback<Target> callback) {
       this.env = env;
       this.uniquifier = uniquifier;
       this.callback = callback;
       this.executor =
-          new AbstractQueueVisitor(
-              /*concurrent=*/ true,
-              /*executorService=*/ FIXED_THREAD_POOL_EXECUTOR,
-              // Leave the thread pool active for other current and future callers.
-              /*shutdownOnCompletion=*/ false,
-              /*failFastOnException=*/ true,
-              /*errorClassifier=*/ SKYKEY_BFS_VISITOR_ERROR_CLASSIFIER);
+          new BFSVisitingTaskExecutor(
+              FIXED_THREAD_POOL_EXECUTOR, SKYKEY_BFS_VISITOR_ERROR_CLASSIFIER);
     }
 
     /** Factory for {@link AbstractSkyKeyBFSVisitor} instances. */
@@ -466,16 +461,7 @@ class ParallelSkyQueryUtils {
     void visitAndWaitForCompletion(Iterable<SkyKey> keys)
         throws QueryException, InterruptedException {
       processingQueue.addAll(ImmutableList.copyOf(preprocessInitialVisit(keys)));
-      // We add the scheduler to the pool, allowing it (as well as any submitted tasks later)
-      // to be failed fast if any QueryException or InterruptedException is received.
-      executor.execute(new Scheduler());
-      try {
-        executor.awaitQuiescence(true);
-      } catch (RuntimeQueryException e) {
-        throw (QueryException) e.getCause();
-      } catch (RuntimeInterruptedException e) {
-        throw (InterruptedException) e.getCause();
-      }
+      executor.bfsVisitAndWaitForCompletion();
     }
 
     /**
@@ -500,49 +486,6 @@ class ParallelSkyQueryUtils {
       }
 
       return builder.build();
-    }
-
-    private class Scheduler implements Runnable {
-      @Override
-      public void run() {
-        // The scheduler keeps running until both the following two conditions are met.
-        //
-        // 1. There is no pending visit in the queue.
-        // 2. There is no pending task (other than itself) in the pool.
-        if (processingQueue.isEmpty() && executor.getRemainingTasksCount() <= 1) {
-          return;
-        }
-
-        // To achieve maximum efficiency, queue is drained in either of the following 2 conditions:
-        //
-        // 1. The number of pending tasks is low. We schedule new tasks to avoid wasting CPU.
-        // 2. The process queue size is large.
-        if (executor.getRemainingTasksCount() < MIN_PENDING_TASKS
-            || processingQueue.size() >= SkyQueryEnvironment.BATCH_CALLBACK_SIZE) {
-          drainProcessingQueue();
-        }
-
-        try {
-          // Wait at most {@code SCHEDULING_INTERVAL_MILLISECONDS} milliseconds.
-          Thread.sleep(SCHEDULING_INTERVAL_MILLISECONDS);
-        } catch (InterruptedException e) {
-          throw new RuntimeInterruptedException(e);
-        }
-
-        executor.execute(new Scheduler());
-      }
-
-      private void drainProcessingQueue() {
-        Collection<T> pendingKeysToVisit = new ArrayList<>(processingQueue.size());
-        processingQueue.drainTo(pendingKeysToVisit);
-        if (pendingKeysToVisit.isEmpty()) {
-          return;
-        }
-
-        for (Task task : getVisitTasks(pendingKeysToVisit)) {
-          executor.execute(task);
-        }
-      }
     }
 
     abstract static class Task implements Runnable {
@@ -596,6 +539,75 @@ class ParallelSkyQueryUtils {
       @Override
       protected void process() throws QueryException, InterruptedException {
         processResultantTargets(keysToUseForResult, callback);
+      }
+    }
+
+    /**
+     * A custom implementation of {@link QuiescingExecutor} which uses a centralized queue and
+     * scheduler for parallel BFS visitations.
+     */
+    private class BFSVisitingTaskExecutor extends AbstractQueueVisitor {
+      private BFSVisitingTaskExecutor(ExecutorService executor, ErrorClassifier errorClassifier) {
+        super(
+            /*concurrent=*/ true,
+            /*executorService=*/ executor,
+            // Leave the thread pool active for other current and future callers.
+            /*shutdownOnCompletion=*/ false,
+            /*failFastOnException=*/ true,
+            /*errorClassifier=*/ errorClassifier);
+      }
+
+      private void bfsVisitAndWaitForCompletion() throws QueryException, InterruptedException {
+        // The scheduler keeps running until either of the following two conditions are met.
+        //
+        // 1. Errors (QueryException or InterruptedException) occurred and visitations should fail
+        //    fast.
+        // 2. There is no pending visit in the queue and no pending task running.
+        while (!mustJobsBeStopped() && (!processingQueue.isEmpty() || getTaskCount() > 0)) {
+          // To achieve maximum efficiency, queue is drained in either of the following two
+          // conditions:
+          //
+          // 1. The number of pending tasks is low. We schedule new tasks to avoid wasting CPU.
+          // 2. The process queue size is large.
+          if (getTaskCount() < MIN_PENDING_TASKS
+              || processingQueue.size() >= SkyQueryEnvironment.BATCH_CALLBACK_SIZE) {
+
+            Collection<T> pendingKeysToVisit = new ArrayList<>(processingQueue.size());
+            processingQueue.drainTo(pendingKeysToVisit);
+            for (Task task : getVisitTasks(pendingKeysToVisit)) {
+              execute(task);
+            }
+          }
+
+          try {
+            Thread.sleep(SCHEDULING_INTERVAL_MILLISECONDS);
+          } catch (InterruptedException e) {
+            // If the main thread waiting for completion of the visitation is interrupted, we should
+            // gracefully terminate all running and pending tasks before exit. If QueryException
+            // occured in any of the worker thread, awaitTerminationAndPropagateErrorsIfAny
+            // propagates the QueryException instead of InterruptedException.
+            setInterrupted();
+            awaitTerminationAndPropagateErrorsIfAny();
+            throw e;
+          }
+        }
+
+        // We reach here either because the visitation is complete, or because an error prevents us
+        // from proceeding with the visitation. awaitTerminationAndPropagateErrorsIfAny will either
+        // gracefully exit if the visitation is complete, or propagate the exception if error
+        // occurred.
+        awaitTerminationAndPropagateErrorsIfAny();
+      }
+
+      private void awaitTerminationAndPropagateErrorsIfAny()
+          throws QueryException, InterruptedException {
+        try {
+          awaitTermination(/*interruptWorkers=*/ true);
+        } catch (RuntimeQueryException e) {
+          throw (QueryException) e.getCause();
+        } catch (RuntimeInterruptedException e) {
+          throw (InterruptedException) e.getCause();
+        }
       }
     }
   }

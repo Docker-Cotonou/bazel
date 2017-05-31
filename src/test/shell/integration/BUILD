@@ -31,6 +31,13 @@ sh_test(
 )
 
 sh_test(
+    name = "python_test",
+    size = "medium",
+    srcs = ["python_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
     name = "loading_phase_tests",
     size = "large",
     srcs = ["loading_phase_tests.sh"],
@@ -218,6 +225,7 @@ sh_test(
     size = "medium",
     srcs = ["build_event_stream_test.sh"],
     data = [":test-deps"],
+    shard_count = 2,
 )
 
 sh_test(

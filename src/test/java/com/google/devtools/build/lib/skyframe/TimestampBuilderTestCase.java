@@ -40,7 +40,6 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.actions.cache.ActionCache;
-import com.google.devtools.build.lib.actions.cache.ActionCache.Entry;
 import com.google.devtools.build.lib.actions.util.DummyExecutor;
 import com.google.devtools.build.lib.actions.util.TestAction;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -162,8 +161,7 @@ public abstract class TimestampBuilderTestCase extends FoundationTestCase {
     ActionExecutionStatusReporter statusReporter =
         ActionExecutionStatusReporter.create(new StoredEventHandler());
     final SkyframeActionExecutor skyframeActionExecutor =
-        new SkyframeActionExecutor(
-            ResourceManager.instance(), eventBusRef, new AtomicReference<>(statusReporter));
+        new SkyframeActionExecutor(eventBusRef, new AtomicReference<>(statusReporter));
 
     Path actionOutputBase = scratch.dir("/usr/local/google/_blaze_jrluser/FAKEMD5/action_out/");
     skyframeActionExecutor.setActionLogBufferPathGenerator(
@@ -243,7 +241,7 @@ public abstract class TimestampBuilderTestCase extends FoundationTestCase {
             executor,
             keepGoing, /*explain=*/
             false,
-            new ActionCacheChecker(actionCache, null, ALWAYS_EXECUTE_FILTER, false),
+            new ActionCacheChecker(actionCache, null, ALWAYS_EXECUTE_FILTER, null),
             null);
 
         List<SkyKey> keys = new ArrayList<>();
@@ -437,11 +435,6 @@ public abstract class TimestampBuilderTestCase extends FoundationTestCase {
     @Override
     public void dump(PrintStream out) {
       out.println("In-memory action cache has " + actionCache.size() + " records");
-    }
-
-    @Override
-    public Entry newEntry(String key, Map<String, String> usedClientEnv, boolean discoversInputs) {
-      return new Entry(key, usedClientEnv, discoversInputs);
     }
   }
 

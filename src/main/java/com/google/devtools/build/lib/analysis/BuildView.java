@@ -35,6 +35,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.Root;
+import com.google.devtools.build.lib.analysis.DependencyResolver.InconsistentAspectOrderException;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -47,7 +48,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.AspectClass;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
@@ -436,7 +437,7 @@ public class BuildView {
       List<String> aspects,
       Options viewOptions,
       TopLevelArtifactContext topLevelOptions,
-      EventHandler eventHandler,
+      ExtendedEventHandler eventHandler,
       EventBus eventBus)
       throws ViewCreationFailedException, InterruptedException {
     LOG.info("Starting analysis");
@@ -563,12 +564,12 @@ public class BuildView {
   }
 
   private AnalysisResult createResult(
-      EventHandler eventHandler,
+      ExtendedEventHandler eventHandler,
       LoadingResult loadingResult,
       TopLevelArtifactContext topLevelOptions,
       BuildView.Options viewOptions,
       SkyframeAnalysisResult skyframeAnalysisResult)
-          throws InterruptedException {
+      throws InterruptedException {
     Collection<Target> testsToRun = loadingResult.getTestsToRun();
     Collection<ConfiguredTarget> configuredTargets = skyframeAnalysisResult.getConfiguredTargets();
     Collection<AspectValue> aspects = skyframeAnalysisResult.getAspects();
@@ -805,8 +806,10 @@ public class BuildView {
    * <p>Preserves the original input ordering.
    */
   private List<TargetAndConfiguration> nodesForTopLevelTargets(
-      BuildConfigurationCollection configurations, Collection<Target> targets,
-      EventHandler eventHandler) throws InterruptedException {
+      BuildConfigurationCollection configurations,
+      Collection<Target> targets,
+      ExtendedEventHandler eventHandler)
+      throws InterruptedException {
     // We use a hash set here to remove duplicate nodes; this can happen for input files and package
     // groups.
     LinkedHashSet<TargetAndConfiguration> nodes = new LinkedHashSet<>(targets.size());
@@ -822,24 +825,23 @@ public class BuildView {
   }
 
   /**
-   * <p>If {@link BuildConfiguration.Options#trimConfigurations()} is true, transforms a collection
-   * of <Target, Configuration> pairs by trimming each target's
-   * configuration to only the fragments the target and its transitive dependencies need.
+   * If {@link BuildConfiguration.Options#trimConfigurations()} is true, transforms a collection of
+   * <Target, Configuration> pairs by trimming each target's configuration to only the fragments the
+   * target and its transitive dependencies need.
    *
    * <p>Else returns configurations that unconditionally include all fragments.
    *
    * <p>Preserves the original input order. Uses original (untrimmed) configurations for targets
    * that can't be evaluated (e.g. due to loading phase errors).
    *
-   * <p>This is suitable for feeding {@link ConfiguredTargetValue} keys: as general principle
-   * {@link ConfiguredTarget}s should have exactly as much information in their configurations as
-   * they need to evaluate and no more (e.g. there's no need for Android settings in a C++
-   * configured target).
+   * <p>This is suitable for feeding {@link ConfiguredTargetValue} keys: as general principle {@link
+   * ConfiguredTarget}s should have exactly as much information in their configurations as they need
+   * to evaluate and no more (e.g. there's no need for Android settings in a C++ configured target).
    */
   // TODO(bazel-team): error out early for targets that fail - untrimmed configurations should
   // never make it through analysis (and especially not seed ConfiguredTargetValues)
   private List<TargetAndConfiguration> getDynamicConfigurations(
-      Iterable<TargetAndConfiguration> inputs, EventHandler eventHandler)
+      Iterable<TargetAndConfiguration> inputs, ExtendedEventHandler eventHandler)
       throws InterruptedException {
     Map<Label, Target> labelsToTargets = new LinkedHashMap<>();
     // We'll get the configs from SkyframeExecutor#getConfigurations, which gets configurations
@@ -911,8 +913,9 @@ public class BuildView {
    * includes all fragments.
    */
   @VisibleForTesting
-  public BuildConfiguration getDynamicConfigurationForTesting(Target target,
-      BuildConfiguration config, EventHandler eventHandler) throws InterruptedException {
+  public BuildConfiguration getDynamicConfigurationForTesting(
+      Target target, BuildConfiguration config, ExtendedEventHandler eventHandler)
+      throws InterruptedException {
     return Iterables.getOnlyElement(getDynamicConfigurations(
         ImmutableList.<TargetAndConfiguration>of(new TargetAndConfiguration(target, config)),
         eventHandler)).getConfiguration();
@@ -961,8 +964,10 @@ public class BuildView {
   // For testing
   @VisibleForTesting
   public Iterable<ConfiguredTarget> getDirectPrerequisitesForTesting(
-      EventHandler eventHandler, ConfiguredTarget ct, BuildConfigurationCollection configurations)
-          throws EvalException, InvalidConfigurationException, InterruptedException {
+      ExtendedEventHandler eventHandler, ConfiguredTarget ct,
+      BuildConfigurationCollection configurations)
+      throws EvalException, InvalidConfigurationException,
+      InterruptedException, InconsistentAspectOrderException {
     return skyframeExecutor.getConfiguredTargets(
         eventHandler, ct.getConfiguration(),
         ImmutableSet.copyOf(
@@ -972,9 +977,11 @@ public class BuildView {
 
   @VisibleForTesting
   public OrderedSetMultimap<Attribute, Dependency> getDirectPrerequisiteDependenciesForTesting(
-      final EventHandler eventHandler, final ConfiguredTarget ct,
+      final ExtendedEventHandler eventHandler,
+      final ConfiguredTarget ct,
       BuildConfigurationCollection configurations)
-      throws EvalException, InvalidConfigurationException, InterruptedException {
+      throws EvalException, InvalidConfigurationException, InterruptedException,
+             InconsistentAspectOrderException {
     if (!(ct.getTarget() instanceof Rule)) {
       return OrderedSetMultimap.create();
     }
@@ -1039,7 +1046,7 @@ public class BuildView {
    * present in this rule's attributes.
    */
   private ImmutableMap<Label, ConfigMatchingProvider> getConfigurableAttributeKeysForTesting(
-      EventHandler eventHandler, TargetAndConfiguration ctg) {
+      ExtendedEventHandler eventHandler, TargetAndConfiguration ctg) {
     if (!(ctg.getTarget() instanceof Rule)) {
       return ImmutableMap.of();
     }
@@ -1060,9 +1067,11 @@ public class BuildView {
   }
 
   private OrderedSetMultimap<Attribute, ConfiguredTarget> getPrerequisiteMapForTesting(
-      final EventHandler eventHandler, ConfiguredTarget target,
+      final ExtendedEventHandler eventHandler,
+      ConfiguredTarget target,
       BuildConfigurationCollection configurations)
-      throws EvalException, InvalidConfigurationException, InterruptedException {
+      throws EvalException, InvalidConfigurationException,
+             InterruptedException, InconsistentAspectOrderException {
     OrderedSetMultimap<Attribute, Dependency> depNodeNames =
         getDirectPrerequisiteDependenciesForTesting(eventHandler, target, configurations);
 
@@ -1078,12 +1087,12 @@ public class BuildView {
   }
 
   /**
-   * Returns a configured target for the specified target and configuration. Returns {@code null}
-   * if something goes wrong.
+   * Returns a configured target for the specified target and configuration. Returns {@code null} if
+   * something goes wrong.
    */
   @VisibleForTesting
   public ConfiguredTarget getConfiguredTargetForTesting(
-      EventHandler eventHandler, Label label, BuildConfiguration config) {
+      ExtendedEventHandler eventHandler, Label label, BuildConfiguration config) {
     return skyframeExecutor.getConfiguredTargetForTesting(eventHandler, label, config);
   }
 
@@ -1094,7 +1103,8 @@ public class BuildView {
   public RuleContext getRuleContextForTesting(
       ConfiguredTarget target, StoredEventHandler eventHandler,
       BuildConfigurationCollection configurations)
-          throws EvalException, InvalidConfigurationException, InterruptedException {
+      throws EvalException, InvalidConfigurationException, InterruptedException,
+             InconsistentAspectOrderException {
     BuildConfiguration targetConfig = target.getConfiguration();
     CachingAnalysisEnvironment env =
         new CachingAnalysisEnvironment(getArtifactFactory(),
@@ -1109,9 +1119,11 @@ public class BuildView {
    * given configured target.
    */
   @VisibleForTesting
-  public RuleContext getRuleContextForTesting(EventHandler eventHandler, ConfiguredTarget target,
+  public RuleContext getRuleContextForTesting(ExtendedEventHandler eventHandler,
+      ConfiguredTarget target,
       AnalysisEnvironment env, BuildConfigurationCollection configurations)
-          throws EvalException, InvalidConfigurationException, InterruptedException {
+      throws EvalException, InvalidConfigurationException, InterruptedException,
+             InconsistentAspectOrderException {
     BuildConfiguration targetConfig = target.getConfiguration();
     return new RuleContext.Builder(
             env,
@@ -1131,15 +1143,17 @@ public class BuildView {
   }
 
   /**
-   * For a configured target dependentTarget, returns the desired configured target
-   * that is depended upon. Useful for obtaining the a target with aspects
-   * required by the dependent.
+   * For a configured target dependentTarget, returns the desired configured target that is depended
+   * upon. Useful for obtaining the a target with aspects required by the dependent.
    */
   @VisibleForTesting
   public ConfiguredTarget getPrerequisiteConfiguredTargetForTesting(
-      EventHandler eventHandler, ConfiguredTarget dependentTarget, Label desiredTarget,
+      ExtendedEventHandler eventHandler,
+      ConfiguredTarget dependentTarget,
+      Label desiredTarget,
       BuildConfigurationCollection configurations)
-      throws EvalException, InvalidConfigurationException, InterruptedException {
+      throws EvalException, InvalidConfigurationException, InterruptedException,
+             InconsistentAspectOrderException {
     Collection<ConfiguredTarget> configuredTargets =
         getPrerequisiteMapForTesting(eventHandler, dependentTarget, configurations).values();
     for (ConfiguredTarget ct : configuredTargets) {

@@ -37,7 +37,6 @@ import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsClassProvider;
 import com.google.devtools.common.options.OptionsProvider;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -265,6 +264,14 @@ public class BuildRequest implements OptionsClassProvider {
     public String getSymlinkPrefix(String productName) {
       return symlinkPrefix == null ? productName + "-" : symlinkPrefix;
     }
+
+    @Option(
+      name = "use_action_cache",
+      defaultValue = "true",
+      category = "undocumented",
+      help = "Whether to use the action cache"
+    )
+    public boolean useActionCache;
   }
 
   /**
@@ -299,7 +306,8 @@ public class BuildRequest implements OptionsClassProvider {
   private boolean runningInEmacs = false;
   private boolean runTests = false;
 
-  private static final List<Class<? extends OptionsBase>> MANDATORY_OPTIONS = ImmutableList.of(
+  private static final ImmutableList<Class<? extends OptionsBase>> MANDATORY_OPTIONS =
+      ImmutableList.of(
           BuildRequestOptions.class,
           PackageCacheOptions.class,
           LoadingOptions.class,

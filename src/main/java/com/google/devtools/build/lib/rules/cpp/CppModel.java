@@ -957,8 +957,9 @@ public final class CppModel {
    */
   private Artifact getLinkedArtifact(LinkTargetType linkTargetType) throws RuleErrorException {
     Artifact result = null;
-    Artifact linuxDefault = CppHelper.getLinuxLinkedArtifact(
-        ruleContext, linkTargetType, linkedArtifactNameSuffix);
+    Artifact linuxDefault =
+        CppHelper.getLinuxLinkedArtifact(
+            ruleContext, configuration, linkTargetType, linkedArtifactNameSuffix);
 
     try {
       String maybePicName = ruleContext.getLabel().getName() + linkedArtifactNameSuffix;
@@ -1117,7 +1118,10 @@ public final class CppModel {
     if (cppConfiguration.useInterfaceSharedObjects() && allowInterfaceSharedObjects) {
       soInterface =
           CppHelper.getLinuxLinkedArtifact(
-              ruleContext, LinkTargetType.INTERFACE_DYNAMIC_LIBRARY, linkedArtifactNameSuffix);
+              ruleContext,
+              configuration,
+              LinkTargetType.INTERFACE_DYNAMIC_LIBRARY,
+              linkedArtifactNameSuffix);
       sonameLinkopts = ImmutableList.of("-Wl,-soname=" +
           SolibSymlinkAction.getDynamicLibrarySoname(soImpl.getRootRelativePath(), false));
     }
@@ -1146,23 +1150,15 @@ public final class CppModel {
     if (!ccOutputs.getLtoBitcodeFiles().isEmpty()
         && featureConfiguration.isEnabled(CppRuleClasses.THIN_LTO)) {
       linkActionBuilder.setLTOIndexing(true);
+      linkActionBuilder.setUsePicForLTOBackendActions(usePicForSharedLibs);
+      // If support is ever added for generating a dwp file for shared
+      // library targets (e.g. when linkstatic=0), then this should change
+      // to generate dwo files when cppConfiguration.useFission(),
+      // and the dwp generating action for the shared library should
+      // include all of the resulting dwo files.
+      linkActionBuilder.setUseFissionForLTOBackendActions(false);
       CppLinkAction indexAction = linkActionBuilder.build();
       env.registerAction(indexAction);
-
-      for (LTOBackendArtifacts ltoArtifacts : indexAction.getAllLTOBackendArtifacts()) {
-        ltoArtifacts.scheduleLTOBackendAction(
-            ruleContext,
-            featureConfiguration,
-            ccToolchain,
-            fdoSupport,
-            usePicForSharedLibs,
-            // If support is ever added for generating a dwp file for shared
-            // library targets (e.g. when linkstatic=0), then this should change
-            // to generate dwo files when cppConfiguration.useFission(),
-            // and the dwp generating action for the shared library should
-            // include all of the resulting dwo files.
-            /*generateDwo=*/ false);
-      }
 
       linkActionBuilder.setLTOIndexing(false);
     }
@@ -1202,8 +1198,7 @@ public final class CppModel {
   }
 
   private CppLinkActionBuilder newLinkActionBuilder(Artifact outputArtifact) {
-    return new CppLinkActionBuilder(
-            ruleContext, outputArtifact, ccToolchain, fdoSupport.getFdoSupport())
+    return new CppLinkActionBuilder(ruleContext, outputArtifact, ccToolchain, fdoSupport)
         .setCrosstoolInputs(ccToolchain.getLink())
         .addNonCodeInputs(context.getTransitiveCompilationPrerequisites());
   }

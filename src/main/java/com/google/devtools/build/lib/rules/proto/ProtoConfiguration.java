@@ -111,12 +111,15 @@ public class ProtoConfiguration extends Fragment {
     public StrictDepsMode strictProtoDeps;
 
     @Option(
-      name = "output_descriptor_set",
-      defaultValue = "true",
+      name = "reuseJavaCompileActionsFromProtoLibrary",
+      defaultValue = "false",
       category = "experimental",
-      help = "ignored."
+      help =
+          "When true, a java_proto_library that wraps a proto_library with java_api_version!=0"
+              + "will reuse its actions. This saves memory and prevents duplicate jars from "
+              + "appearing on a Java compilation's classpath"
     )
-    public boolean outputDescriptorSet;
+    public boolean reuseJavaCompileActionsFromProtoLibrary;
 
     @Override
     public FragmentOptions getHost(boolean fallback) {
@@ -129,6 +132,7 @@ public class ProtoConfiguration extends Fragment {
       host.protoToolchainForJavaLite = protoToolchainForJavaLite;
       host.protoToolchainForCc = protoToolchainForCc;
       host.strictProtoDeps = strictProtoDeps;
+      host.reuseJavaCompileActionsFromProtoLibrary = reuseJavaCompileActionsFromProtoLibrary;
       return host;
     }
   }
@@ -161,6 +165,7 @@ public class ProtoConfiguration extends Fragment {
   private final Label protoToolchainForJavaLite;
   private final Label protoToolchainForCc;
   private final StrictDepsMode strictProtoDeps;
+  private final boolean reuseJavaCompileActionsFromProtoLibrary;
 
   public ProtoConfiguration(Options options) {
     this.experimentalProtoExtraActions = options.experimentalProtoExtraActions;
@@ -170,6 +175,7 @@ public class ProtoConfiguration extends Fragment {
     this.protoToolchainForJavaLite = options.protoToolchainForJavaLite;
     this.protoToolchainForCc = options.protoToolchainForCc;
     this.strictProtoDeps = options.strictProtoDeps;
+    this.reuseJavaCompileActionsFromProtoLibrary = options.reuseJavaCompileActionsFromProtoLibrary;
   }
 
   public ImmutableList<String> protocOpts() {
@@ -203,5 +209,9 @@ public class ProtoConfiguration extends Fragment {
 
   public StrictDepsMode strictProtoDeps() {
     return strictProtoDeps;
+  }
+
+  public boolean reuseJavaCompileActionsFromProtoLibrary() {
+    return reuseJavaCompileActionsFromProtoLibrary;
   }
 }

@@ -32,28 +32,32 @@ import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
+import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
 import com.google.devtools.build.lib.packages.PredicateWithMessage;
 import com.google.devtools.build.lib.packages.RequiredProviders;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.SkylarkAspect;
+import com.google.devtools.build.lib.packages.SkylarkAspectClass;
 import com.google.devtools.build.lib.packages.SkylarkClassObject;
 import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.rules.SkylarkAttr;
+import com.google.devtools.build.lib.rules.SkylarkAttr.Descriptor;
 import com.google.devtools.build.lib.rules.SkylarkFileType;
-import com.google.devtools.build.lib.rules.SkylarkRuleClassFunctions;
 import com.google.devtools.build.lib.rules.SkylarkRuleClassFunctions.RuleFunction;
+import com.google.devtools.build.lib.skyframe.SkylarkImportLookupFunction;
 import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
+import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Environment;
-import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import java.util.Collection;
 import org.junit.Assert;
@@ -96,36 +100,37 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
 
   @Test
   public void testCannotOverrideBuiltInAttribute() throws Exception {
-    ev.setFailFast(true);
+    ev.setFailFast(false);
     try {
       evalAndExport(
           "def impl(ctx): return", "r = rule(impl, attrs = {'tags': attr.string_list()})");
       Assert.fail("Expected error '"
           + "There is already a built-in attribute 'tags' which cannot be overridden"
           + "' but got no error");
-    } catch (EvalException e) {
-      assertThat(e).hasMessage(
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains(
           "There is already a built-in attribute 'tags' which cannot be overridden");
     }
   }
 
   @Test
   public void testCannotOverrideBuiltInAttributeName() throws Exception {
-    ev.setFailFast(true);
+    ev.setFailFast(false);
     try {
       evalAndExport(
           "def impl(ctx): return", "r = rule(impl, attrs = {'name': attr.string()})");
       Assert.fail("Expected error '"
           + "There is already a built-in attribute 'name' which cannot be overridden"
           + "' but got no error");
-    } catch (EvalException e) {
-      assertThat(e).hasMessage(
+    } catch (AssertionError e) {
+      assertThat(e.getMessage()).contains(
           "There is already a built-in attribute 'name' which cannot be overridden");
     }
   }
 
   @Test
   public void testImplicitArgsAttribute() throws Exception {
+    ev.setFailFast(false);
     evalAndExport(
         "def _impl(ctx):",
         "  pass",
@@ -145,12 +150,16 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
 
   @Test
   public void testAttrWithOnlyType() throws Exception {
-    Attribute attr = buildAttribute("a1", "attr.string_list()", "");
+    Attribute attr = buildAttribute("a1", "attr.string_list()");
     assertEquals(Type.STRING_LIST, attr.getType());
   }
 
   private Attribute buildAttribute(String name, String... lines) throws Exception {
-    return ((SkylarkAttr.Descriptor) evalRuleClassCode(lines)).build(name);
+    String[] strings = lines.clone();
+    strings[strings.length - 1] = String.format("%s = %s", name, strings[strings.length - 1]);
+    evalAndExport(strings);
+    Descriptor lookup = (Descriptor) ev.lookup(name);
+    return lookup != null ? lookup.build(name) : null;
   }
 
   @Test
@@ -226,53 +235,92 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     assertFalse(attr.getAllowedFileTypesPredicate().apply("a.txt"));
   }
 
+  private static SkylarkProviderIdentifier legacy(String legacyId) {
+    return SkylarkProviderIdentifier.forLegacy(legacyId);
+  }
+
+  private static SkylarkProviderIdentifier declared(String exportedName) {
+    return SkylarkProviderIdentifier.forKey(
+        new SkylarkClassObjectConstructor.SkylarkKey(FAKE_LABEL, exportedName));
+  }
+
   @Test
   public void testAttrWithProviders() throws Exception {
     Attribute attr =
-        buildAttribute("a1", "attr.label_list(allow_files = True, providers = ['a', 'b'])");
+        buildAttribute("a1",
+            "b = provider()",
+            "attr.label_list(allow_files = True, providers = ['a', b])");
     assertThat(attr.getMandatoryProvidersList())
-        .containsExactly(ImmutableSet.of(legacy("a"), legacy("b")));
-  }
-
-  private static SkylarkProviderIdentifier legacy(String legacyId) {
-    return SkylarkProviderIdentifier.forLegacy(legacyId);
+        .containsExactly(ImmutableSet.of(legacy("a"), declared("b")));
   }
 
   @Test
   public void testAttrWithProvidersList() throws Exception {
     Attribute attr =
-        buildAttribute("a1", "attr.label_list(allow_files = True,"
-            + " providers = [['a', 'b'], ['c']])");
+        buildAttribute("a1",
+            "b = provider()",
+            "attr.label_list(allow_files = True, providers = [['a', b], ['c']])");
     assertThat(attr.getMandatoryProvidersList()).containsExactly(
-        ImmutableSet.of(legacy("a"), legacy("b")),
+        ImmutableSet.of(legacy("a"), declared("b")),
         ImmutableSet.of(legacy("c")));
+  }
+
+  private void checkAttributeError(String expectedMessage, String... lines) throws Exception {
+    ev.setFailFast(false);
+    buildAttribute("fakeAttribute", lines);
+    MoreAsserts.assertContainsEvent(ev.getEventCollector(), expectedMessage);
   }
 
   @Test
   public void testAttrWithWrongProvidersList() throws Exception {
-    checkErrorContains(
-        "element in 'providers' is of unexpected type."
-            + " Should be list of string, but got list with an element of type int.",
+    checkAttributeError(
+        "element in 'providers' is of unexpected type. Either all elements should be providers,"
+            + " or all elements should be lists of providers,"
+            + " but got list with an element of type int.",
         "attr.label_list(allow_files = True,  providers = [['a', 1], ['c']])");
 
-    checkErrorContains(
-        "element in 'providers' is of unexpected type."
-            + " Should be list of string, but got string.",
-        "attr.label_list(allow_files = True,  providers = [['a', 'b'], 'c'])");
+    checkAttributeError(
+        "element in 'providers' is of unexpected type. Either all elements should be providers,"
+            + " or all elements should be lists of providers,"
+            + " but got an element of type string.",
+        "b = provider()",
+        "attr.label_list(allow_files = True,  providers = [['a', b], 'c'])");
+
+    checkAttributeError(
+        "element in 'providers' is of unexpected type. Either all elements should be providers,"
+            + " or all elements should be lists of providers,"
+            + " but got an element of type string.",
+        "c = provider()",
+        "attr.label_list(allow_files = True,  providers = [['a', b], c])");
+
   }
 
   @Test
   public void testLabelListWithAspects() throws Exception {
-    SkylarkAttr.Descriptor attr =
-        (SkylarkAttr.Descriptor) evalRuleClassCode(
+    evalAndExport(
             "def _impl(target, ctx):",
             "   pass",
             "my_aspect = aspect(implementation = _impl)",
-            "attr.label_list(aspects = [my_aspect])");
-    Object aspect = ev.lookup("my_aspect");
+            "a = attr.label_list(aspects = [my_aspect])");
+    SkylarkAttr.Descriptor attr = (SkylarkAttr.Descriptor) ev.lookup("a");
+            SkylarkAspect aspect = (SkylarkAspect) ev.lookup("my_aspect");
     assertThat(aspect).isNotNull();
-    assertThat(attr.getAspects()).containsExactly(aspect);
+    assertThat(attr.build("xxx").getAspectClasses()).containsExactly(aspect.getAspectClass());
   }
+
+  @Test
+  public void testLabelWithAspects() throws Exception {
+    evalAndExport(
+        "def _impl(target, ctx):",
+        "   pass",
+        "my_aspect = aspect(implementation = _impl)",
+        "a = attr.label(aspects = [my_aspect])");
+    SkylarkAttr.Descriptor attr = (SkylarkAttr.Descriptor) ev.lookup("a");
+    SkylarkAspect aspect = (SkylarkAspect) ev.lookup("my_aspect");
+    assertThat(aspect).isNotNull();
+    assertThat(attr.build("xxx").getAspectClasses()).containsExactly(aspect.getAspectClass());
+  }
+
 
   @Test
   public void testLabelListWithAspectsError() throws Exception {
@@ -492,8 +540,10 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   }
 
   protected void evalAndExport(String... lines) throws Exception {
-    eval(lines);
-    SkylarkRuleClassFunctions.exportRuleFunctionsAndAspects(ev.getEnvironment(), FAKE_LABEL);
+    BuildFileAST buildFileAST = BuildFileAST.parseAndValidateSkylarkString(
+        ev.getEnvironment(), lines);
+    SkylarkImportLookupFunction.execAndExport(
+        buildFileAST, FAKE_LABEL, ev.getEventHandler(), ev.getEnvironment());
   }
 
   @Test
@@ -1021,17 +1071,17 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
   }
 
   private static SkylarkClassObject makeStruct(String field, Object value) {
-    return SkylarkClassObjectConstructor.STRUCT.create(
+    return NativeClassObjectConstructor.STRUCT.create(
         ImmutableMap.of(field, value),
         "no field '%'");
   }
 
   private static SkylarkClassObject makeBigStruct(Environment env) {
     // struct(a=[struct(x={1:1}), ()], b=(), c={2:2})
-    return SkylarkClassObjectConstructor.STRUCT.create(
+    return NativeClassObjectConstructor.STRUCT.create(
         ImmutableMap.<String, Object>of(
             "a", MutableList.<Object>of(env,
-                SkylarkClassObjectConstructor.STRUCT.create(ImmutableMap.<String, Object>of(
+                NativeClassObjectConstructor.STRUCT.create(ImmutableMap.<String, Object>of(
                     "x", SkylarkDict.<Object, Object>of(env, 1, 1)),
                     "no field '%s'"),
                 Tuple.of()),
@@ -1120,10 +1170,10 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
         "data = struct(x = 1)"
     );
     SkylarkClassObject data = (SkylarkClassObject) lookup("data");
-    assertThat(SkylarkClassObjectConstructor.STRUCT.isExported()).isTrue();
-    assertThat(data.getConstructor()).isEqualTo(SkylarkClassObjectConstructor.STRUCT);
+    assertThat(NativeClassObjectConstructor.STRUCT.isExported()).isTrue();
+    assertThat(data.getConstructor()).isEqualTo(NativeClassObjectConstructor.STRUCT);
     assertThat(data.getConstructor().getKey())
-        .isEqualTo(SkylarkClassObjectConstructor.STRUCT.getKey());
+        .isEqualTo(NativeClassObjectConstructor.STRUCT.getKey());
   }
 
   @Test
@@ -1144,7 +1194,8 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     evalAndExport(
         "def _impl(target, ctx):",
         "   pass",
-        "my_aspect = aspect(_impl, required_aspect_providers=['java', 'cc'])"
+        "cc = provider()",
+        "my_aspect = aspect(_impl, required_aspect_providers=['java', cc])"
     );
     SkylarkAspect myAspect = (SkylarkAspect) lookup("my_aspect");
     RequiredProviders requiredProviders = myAspect.getDefinition(AspectParameters.EMPTY)
@@ -1153,7 +1204,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     assertThat(requiredProviders.isSatisfiedBy(AdvertisedProviderSet.EMPTY)).isFalse();
     assertThat(requiredProviders.isSatisfiedBy(
         AdvertisedProviderSet.builder()
-            .addSkylark("cc")
+            .addSkylark(declared("cc"))
             .addSkylark("java")
             .build()))
         .isTrue();
@@ -1169,7 +1220,8 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     evalAndExport(
         "def _impl(target, ctx):",
         "   pass",
-        "my_aspect = aspect(_impl, required_aspect_providers=[['java'], ['cc']])"
+        "cc = provider()",
+        "my_aspect = aspect(_impl, required_aspect_providers=[['java'], [cc]])"
     );
     SkylarkAspect myAspect = (SkylarkAspect) lookup("my_aspect");
     RequiredProviders requiredProviders = myAspect.getDefinition(AspectParameters.EMPTY)
@@ -1183,7 +1235,7 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
         .isTrue();
     assertThat(requiredProviders.isSatisfiedBy(
         AdvertisedProviderSet.builder()
-            .addSkylark("cc")
+            .addSkylark(declared("cc"))
             .build()))
         .isTrue();
     assertThat(requiredProviders.isSatisfiedBy(
@@ -1221,6 +1273,76 @@ public class SkylarkRuleClassFunctionsTest extends SkylarkTestCase {
     assertThat(requiredProviders.isSatisfiedBy(AdvertisedProviderSet.EMPTY)).isFalse();
   }
 
+  @Test
+  public void aspectProvides() throws Exception {
+    evalAndExport(
+        "def _impl(target, ctx):",
+        "   pass",
+        "y = provider()",
+        "my_aspect = aspect(_impl, provides = ['x', y])"
+    );
+    SkylarkAspect myAspect = (SkylarkAspect) lookup("my_aspect");
+    AdvertisedProviderSet advertisedProviders = myAspect.getDefinition(AspectParameters.EMPTY)
+        .getAdvertisedProviders();
+    assertThat(advertisedProviders.canHaveAnyProvider()).isFalse();
+    assertThat(advertisedProviders.getSkylarkProviders())
+        .containsExactly(legacy("x"), declared("y"));
+  }
+
+  @Test
+  public void aspectProvidesError() throws Exception {
+    ev.setFailFast(false);
+    evalAndExport(
+        "def _impl(target, ctx):",
+        "   pass",
+        "y = provider()",
+        "my_aspect = aspect(_impl, provides = ['x', 1])"
+    );
+    MoreAsserts.assertContainsEvent(ev.getEventCollector(),
+        " Illegal argument: element in 'provides' is of unexpected type."
+            + " Should be list of providers, but got int. ");
+  }
+
+
+
+  @Test
+  public void fancyExports() throws Exception {
+    evalAndExport(
+        "def _impla(target, ctx): pass",
+        "p, (a, p1) = [",
+        "   provider(),",
+        "   [ aspect(_impla),",
+        "     provider() ]",
+        "]"
+    );
+    SkylarkClassObjectConstructor p = (SkylarkClassObjectConstructor) lookup("p");
+    SkylarkAspect a = (SkylarkAspect) lookup("a");
+    SkylarkClassObjectConstructor p1 = (SkylarkClassObjectConstructor) lookup("p1");
+    assertThat(p.getPrintableName()).isEqualTo("p");
+    assertThat(p.getKey())
+        .isEqualTo(new SkylarkClassObjectConstructor.SkylarkKey(FAKE_LABEL, "p"));
+    assertThat(p1.getPrintableName()).isEqualTo("p1");
+    assertThat(p1.getKey())
+        .isEqualTo(new SkylarkClassObjectConstructor.SkylarkKey(FAKE_LABEL, "p1"));
+    assertThat(a.getAspectClass()).isEqualTo(
+        new SkylarkAspectClass(FAKE_LABEL, "a")
+    );
+  }
+
+  @Test
+  public void multipleTopLevels() throws Exception {
+    evalAndExport(
+        "p = provider()",
+        "p1 = p"
+    );
+    SkylarkClassObjectConstructor p = (SkylarkClassObjectConstructor) lookup("p");
+    SkylarkClassObjectConstructor p1 = (SkylarkClassObjectConstructor) lookup("p1");
+    assertThat(p).isEqualTo(p1);
+    assertThat(p.getKey())
+        .isEqualTo(new SkylarkClassObjectConstructor.SkylarkKey(FAKE_LABEL, "p"));
+    assertThat(p1.getKey())
+        .isEqualTo(new SkylarkClassObjectConstructor.SkylarkKey(FAKE_LABEL, "p"));
+  }
 
 
   @Test

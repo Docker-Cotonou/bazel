@@ -27,7 +27,7 @@ import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.lib.util.GroupedList.GroupedListHelper;
@@ -96,6 +96,16 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
             super.handle(e);
           } else {
             evaluatorContext.getReporter().handle(e);
+          }
+        }
+
+        @Override
+        @SuppressWarnings("UnsynchronizedOverridesSynchronized") // only delegates to thread-safe.
+        public void post(ExtendedEventHandler.Postable e) {
+          if (e instanceof ExtendedEventHandler.ProgressLike) {
+            evaluatorContext.getReporter().post(e);
+          } else {
+            super.post(e);
           }
         }
       };
@@ -479,7 +489,7 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
   }
 
   @Override
-  public EventHandler getListener() {
+  public ExtendedEventHandler getListener() {
     checkActive();
     return eventHandler;
   }

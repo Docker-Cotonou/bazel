@@ -547,7 +547,7 @@ public class CcCommonTest extends BuildViewTestCase {
         "    path = '/foo')");
     getSkyframeExecutor()
         .invalidateFilesUnderPathForTesting(
-            eventCollector,
+            reporter,
             new ModifiedFileSet.Builder().modify(new PathFragment("WORKSPACE")).build(),
             rootDirectory);
     FileSystemUtils.createDirectoryAndParents(scratch.resolve("/foo/bar"));
@@ -889,6 +889,19 @@ public class CcCommonTest extends BuildViewTestCase {
     getConfiguredTarget("//third_party/a:a");
     assertContainsEvent(
         "header 'third_party/a/v1/b.h' is not under the specified strip prefix 'third_party/a/v2'");
+  }
+
+  @Test
+  public void testSymlinkActionIsNotRegisteredWhenIncludePrefixDoesntChangePath() throws Exception {
+    scratch.file(
+        "third_party/BUILD",
+        "licenses(['notice'])",
+        "cc_library(name='a', hdrs=['a.h'], include_prefix='third_party')");
+
+    CppCompilationContext context =
+        getConfiguredTarget("//third_party:a").getProvider(CppCompilationContext.class);
+    assertThat(ActionsTestUtil.prettyArtifactNames(context.getDeclaredIncludeSrcs()))
+        .doesNotContain("third_party/_virtual_includes/a/third_party/a.h");
   }
 
   /**

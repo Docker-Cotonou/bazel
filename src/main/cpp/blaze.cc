@@ -27,7 +27,6 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -61,7 +60,6 @@
 #include "src/main/cpp/util/errors.h"
 #include "src/main/cpp/util/exit_code.h"
 #include "src/main/cpp/util/file.h"
-#include "src/main/cpp/util/file_platform.h"
 #include "src/main/cpp/util/logging.h"
 #include "src/main/cpp/util/numbers.h"
 #include "src/main/cpp/util/port.h"
@@ -352,7 +350,7 @@ static vector<string> GetArgumentArray() {
 
   result.push_back("-XX:+HeapDumpOnOutOfMemoryError");
   string heap_crash_path = globals->options->output_base;
-  result.push_back("-XX:HeapDumpPath=" + ConvertPath(heap_crash_path));
+  result.push_back("-XX:HeapDumpPath=" + blaze::PathAsJvmFlag(heap_crash_path));
 
   result.push_back("-Xverify:none");
 
@@ -384,7 +382,7 @@ static vector<string> GetArgumentArray() {
         java_library_path += blaze::ListSeparator();
       }
       first = false;
-      java_library_path += blaze::ConvertPath(
+      java_library_path += blaze::PathAsJvmFlag(
           blaze_util::JoinPath(real_install_dir, blaze_util::Dirname(it)));
     }
   }
@@ -482,10 +480,10 @@ static vector<string> GetArgumentArray() {
   } else {
     result.push_back("--use_custom_exit_code_on_abrupt_exit=false");
   }
-  if (globals->options->use_action_cache) {
-    result.push_back("--use_action_cache=true");
-  } else {
-    result.push_back("--use_action_cache=false");
+
+  if (!globals->options->GetExplicitHostJavabase().empty()) {
+    result.push_back("--host_javabase=" +
+                     globals->options->GetExplicitHostJavabase());
   }
 
   // This is only for Blaze reporting purposes; the real interpretation of the
@@ -1533,8 +1531,9 @@ void GrpcBlazeServer::CancelThread() {
   while (running) {
     char buf;
 
-    int bytes_read = pipe_->Receive(&buf, 1);
-    if (bytes_read < 0 && errno == EINTR) {
+    int error;
+    int bytes_read = pipe_->Receive(&buf, 1, &error);
+    if (bytes_read < 0 && error == blaze_util::IPipe::INTERRUPTED) {
       continue;
     } else if (bytes_read != 1) {
       pdie(blaze_exit_code::INTERNAL_ERROR,
@@ -1671,8 +1670,9 @@ unsigned int GrpcBlazeServer::Communicate() {
 
     if (!response.standard_output().empty()) {
       size_t size = response.standard_output().size();
-      size_t r = fwrite(response.standard_output().c_str(), 1, size, stdout);
-      if (r < size && errno == EPIPE) {
+      if (blaze_util::WriteToStdOutErr(response.standard_output().c_str(), size,
+                                       /* to_stdout */ true) ==
+          blaze_util::WriteResult::BROKEN_PIPE) {
         pipe_broken_now = true;
         broken_pipe_name = "standard output";
       }
@@ -1680,8 +1680,9 @@ unsigned int GrpcBlazeServer::Communicate() {
 
     if (!response.standard_error().empty()) {
       size_t size = response.standard_error().size();
-      size_t r = fwrite(response.standard_error().c_str(), 1, size, stderr);
-      if (r < size && errno == EPIPE) {
+      if (blaze_util::WriteToStdOutErr(response.standard_error().c_str(), size,
+                                       /* to_stdout */ false) ==
+          blaze_util::WriteResult::BROKEN_PIPE) {
         pipe_broken_now = true;
         broken_pipe_name = "standard error";
       }

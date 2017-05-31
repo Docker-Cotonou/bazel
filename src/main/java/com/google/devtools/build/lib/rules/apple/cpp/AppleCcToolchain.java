@@ -53,17 +53,18 @@ public class AppleCcToolchain extends CcToolchain {
   public static final String APPLE_SDK_PLATFORM_VALUE_KEY = "apple_sdk_platform_value";
 
   @Override
-  protected Map<String, String> getBuildVariables(RuleContext ruleContext) {
+  protected Map<String, String> getBuildVariables(RuleContext ruleContext)
+      throws RuleErrorException {
     AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
-    
+
     if (appleConfiguration.getXcodeVersion() == null) {
-      ruleContext.ruleError("Xcode version must be specified to use an Apple CROSSTOOL");
+      ruleContext.throwWithRuleError("Xcode version must be specified to use an Apple CROSSTOOL");
     }
-    
+
     Platform platform = appleConfiguration.getSingleArchPlatform();
 
-    Map<String, String> appleEnv = getEnvironment(ruleContext);
-    
+    Map<String, String> appleEnv = getEnvironmentBuildVariables(ruleContext);
+
     return ImmutableMap.<String, String>builder()
         .put(
             XCODE_VERSION_KEY,
@@ -113,8 +114,7 @@ public class AppleCcToolchain extends CcToolchain {
         .build();
   }
 
-  @Override
-  public ImmutableMap<String, String> getEnvironment(RuleContext ruleContext) {
+  private ImmutableMap<String, String> getEnvironmentBuildVariables(RuleContext ruleContext) {
     Map<String, String> builder = new LinkedHashMap<>();
     CppConfiguration cppConfiguration = ruleContext.getFragment(CppConfiguration.class);
     AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);

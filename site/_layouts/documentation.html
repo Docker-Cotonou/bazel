@@ -25,6 +25,8 @@ version_prefix: /versions/master
           </a>
           <nav class="sidebar collapse" id="sidebar-nav">
             <ul class="sidebar-nav">
+              <li><a href="{{ page.version_prefix }}/docs/bazel-overview.html">Bazel Overview</a></li>
+
               <li>
                 <a class="sidebar-nav-heading" data-toggle="collapse"
                     href="#installing-menu" aria-expanded="false"
@@ -87,19 +89,11 @@ version_prefix: /versions/master
               <li><a href="{{ page.version_prefix }}/docs/skylark/language.html">Language</a></li>
               <li><a href="{{ page.version_prefix }}/docs/skylark/macros.html">Macros</a></li>
               <li><a href="{{ page.version_prefix }}/docs/skylark/rules.html">Rules</a></li>
+              <li><a href="{{ page.version_prefix }}/docs/skylark/depsets.html">Depsets</a></li>
               <li><a href="{{ page.version_prefix }}/docs/skylark/aspects.html">Aspects</a></li>
               <li><a href="{{ page.version_prefix }}/docs/skylark/repository_rules.html">Repository rules</a></li>
               <li><a href="{{ page.version_prefix }}/docs/rule-challenges.html">Challenges of writing rules</a></li>
-              <li>
-                <a class="sidebar-nav-heading" data-toggle="collapse"
-                    href="#skylark-lib-menu" aria-expanded="false"
-                    aria-controls="skylark-lib-menu">
-                  Reference <span class="caret"></span>
-                </a>
-                <ul class="collapse sidebar-nav sidebar-submenu" id="skylark-lib-menu">
-                {% include skylark-nav.html %}
-                </ul>
-              </li>
+              <li><a href="{{ page.version_prefix }}/docs/skylark/lib/skylark-overview.html">Reference</a></li>
               <li><a href="{{ page.version_prefix }}/docs/skylark/cookbook.html">Examples</a></li>
               <li><a href="{{ page.version_prefix }}/docs/skylark/deploying.html">Packaging rules</a></li>
               <li><a href="https://skydoc.bazel.build" target="_blank">Documenting rules</a></li>

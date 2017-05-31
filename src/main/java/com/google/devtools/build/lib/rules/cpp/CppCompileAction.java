@@ -36,6 +36,7 @@ import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.extra.CppCompileInfo;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
+import com.google.devtools.build.lib.analysis.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.analysis.config.PerLabelOptions;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.CollectionUtils;
@@ -78,7 +79,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 
 /** Action that represents some kind of C++ compilation step. */
 @ThreadCompatible
@@ -123,7 +123,7 @@ public class CppCompileAction extends AbstractAction
    * A string constant for the c++ compilation action.
    */
   public static final String CPP_COMPILE = "c++-compile";
-  
+
   /** A string constant for the c++ module compile action. */
   public static final String CPP_MODULE_CODEGEN = "c++-module-codegen";
 
@@ -168,7 +168,6 @@ public class CppCompileAction extends AbstractAction
   public static final String CLIF_MATCH = "clif-match";
 
   private final ImmutableMap<String, String> localShellEnvironment;
-  private final boolean isCodeCoverageEnabled;
   protected final Artifact outputFile;
   private final Artifact sourceFile;
   private final Label sourceLabel;
@@ -215,9 +214,8 @@ public class CppCompileAction extends AbstractAction
    */
   private final UUID actionClassId;
 
-  // This can be read/written from multiple threads, and so accesses should be synchronized.
-  @GuardedBy("this")
-  private boolean inputsKnown = false;
+  /** Whether this action needs to discover inputs. */
+  private final boolean discoversInputs;
 
   /**
    * Set when the action prepares for execution. Used to preserve state between preparation and
@@ -267,8 +265,6 @@ public class CppCompileAction extends AbstractAction
    * @param lipoScannables List of artifacts to include-scan when this action is a lipo action
    * @param additionalIncludeScannables list of additional artifacts to include-scan
    * @param actionClassId TODO(bazel-team): Add parameter description
-   * @param executionRequirements out-of-band hints to be passed to the execution backend to signal
-   *     platform requirements
    * @param environment TODO(bazel-team): Add parameter description
    * @param builtinIncludeFiles List of include files that may be included even if they are not
    *     mentioned in the source file or any of the headers included by it
@@ -298,7 +294,6 @@ public class CppCompileAction extends AbstractAction
       @Nullable Artifact dwoFile,
       Artifact optionalSourceFile,
       ImmutableMap<String, String> localShellEnvironment,
-      boolean isCodeCoverageEnabled,
       CppConfiguration cppConfiguration,
       CppCompilationContext context,
       Class<? extends CppCompileActionContext> actionContext,
@@ -319,7 +314,6 @@ public class CppCompileAction extends AbstractAction
         CollectionUtils.asListWithoutNulls(
             outputFile, (dotdFile == null ? null : dotdFile.artifact()), gcnoFile, dwoFile));
     this.localShellEnvironment = localShellEnvironment;
-    this.isCodeCoverageEnabled = isCodeCoverageEnabled;
     this.sourceLabel = sourceLabel;
     this.sourceFile = sourceFile;
     this.outputFile = Preconditions.checkNotNull(outputFile);
@@ -338,7 +332,7 @@ public class CppCompileAction extends AbstractAction
     Preconditions.checkArgument(!shouldPruneModules || shouldScanIncludes, this);
     this.usePic = usePic;
     this.useHeaderModules = useHeaderModules;
-    this.inputsKnown = !shouldScanIncludes && !cppSemantics.needsDotdInputPruning();
+    this.discoversInputs = shouldScanIncludes || cppSemantics.needsDotdInputPruning();
     this.cppCompileCommandLine =
         new CppCompileCommandLine(
             sourceFile, dotdFile, copts, coptsFilter, features, variables, actionName);
@@ -382,10 +376,6 @@ public class CppCompileAction extends AbstractAction
     return builtinIncludeFiles;
   }
 
-  public String getHostSystemName() {
-    return cppConfiguration.getHostSystemName();
-  }
-
   @Override
   public NestedSet<Artifact> getMandatoryInputs() {
     return mandatoryInputs;
@@ -403,11 +393,6 @@ public class CppCompileAction extends AbstractAction
       return ImmutableSet.of(outputFile);
     }
     return super.getMandatoryOutputs();
-  }
-
-  @Override
-  public synchronized boolean inputsKnown() {
-    return inputsKnown;
   }
 
   /**
@@ -428,7 +413,7 @@ public class CppCompileAction extends AbstractAction
 
   @Override
   public boolean discoversInputs() {
-    return true;
+    return discoversInputs;
   }
 
   @VisibleForTesting  // productionVisibility = Visibility.PRIVATE
@@ -442,7 +427,7 @@ public class CppCompileAction extends AbstractAction
       throws ActionExecutionException, InterruptedException {
     Executor executor = actionExecutionContext.getExecutor();
     Iterable<Artifact> initialResult;
-    
+
     actionExecutionContext
         .getExecutor()
         .getEventBus()
@@ -706,7 +691,9 @@ public class CppCompileAction extends AbstractAction
   @Override
   public ImmutableMap<String, String> getEnvironment() {
     Map<String, String> environment = new LinkedHashMap<>(localShellEnvironment);
-    if (isCodeCoverageEnabled) {
+    if (!getExecutionInfo().containsKey(ExecutionRequirements.REQUIRES_DARWIN)) {
+      // Linux: this prevents gcc/clang from writing the unpredictable (and often irrelevant) value
+      // of getcwd() into the debug info. Not applicable to Darwin or Windows, which have no /proc.
       environment.put("PWD", "/proc/self/cwd");
     }
 
@@ -761,7 +748,7 @@ public class CppCompileAction extends AbstractAction
     }
     info.setOutputFile(outputFile.getExecPathString());
     info.setSourceFile(getSourceFile().getExecPathString());
-    if (inputsKnown()) {
+    if (inputsDiscovered()) {
       info.addAllSourcesAndHeaders(Artifact.toExecPaths(getInputs()));
     } else {
       info.addSourcesAndHeaders(getSourceFile().getExecPathString());
@@ -785,7 +772,7 @@ public class CppCompileAction extends AbstractAction
   public ImmutableMap<String, String> getExecutionInfo() {
     return executionInfo;
   }
-  
+
   /**
    * Enforce that the includes actually visited during the compile were properly
    * declared in the rules.
@@ -958,11 +945,10 @@ public class CppCompileAction extends AbstractAction
    *
    * @throws ActionExecutionException iff any errors happen during update.
    */
-  @VisibleForTesting
+  @VisibleForTesting  // productionVisibility = Visibility.PRIVATE
   @ThreadCompatible
-  public final synchronized void updateActionInputs(NestedSet<Artifact> discoveredInputs)
+  public final void updateActionInputs(NestedSet<Artifact> discoveredInputs)
       throws ActionExecutionException {
-    inputsKnown = false;
     NestedSetBuilder<Artifact> inputs = NestedSetBuilder.stableOrder();
     Profiler.instance().startTask(ProfilerTask.ACTION_UPDATE, this);
     try {
@@ -970,14 +956,10 @@ public class CppCompileAction extends AbstractAction
       if (optionalSourceFile != null) {
         inputs.add(optionalSourceFile);
       }
-      inputs.addAll(context.getTransitiveCompilationPrerequisites());
       inputs.addTransitive(discoveredInputs);
-      inputsKnown = true;
+      updateInputs(inputs.build());
     } finally {
       Profiler.instance().completeTask(ProfilerTask.ACTION_UPDATE);
-      synchronized (this) {
-        setInputs(inputs.build());
-      }
     }
   }
 
@@ -1011,18 +993,6 @@ public class CppCompileAction extends AbstractAction
         new CcToolchainFeatures.Variables.Builder();
     variableBuilder.addStringSequenceVariable("module_files", usedModulePaths.build());
     return variableBuilder.build();
-  }
-
-  @Override protected void setInputs(Iterable<Artifact> inputs) {
-    super.setInputs(inputs);
-  }
-
-  @Override
-  public synchronized void updateInputs(Iterable<Artifact> inputs) {
-    inputsKnown = true;
-    synchronized (this) {
-      setInputs(inputs);
-    }
   }
 
   @Override
@@ -1090,11 +1060,6 @@ public class CppCompileAction extends AbstractAction
       return srcs.build();
     }
     return context.getDeclaredIncludeSrcs();
-  }
-
-  @Override
-  public ResourceSet estimateResourceConsumption(Executor executor) {
-    return executor.getContext(actionContext).estimateResourceConsumption(this);
   }
 
   @VisibleForTesting
@@ -1266,9 +1231,9 @@ public class CppCompileAction extends AbstractAction
   }
 
   /**
-   * Provides list of include files needed for performing extra actions on this action when run
-   * remotely. The list of include files is created by performing a header scan on the known input
-   * files.
+   * When compiling with modules, the C++ compile action only has the {@code .pcm} files on its
+   * inputs, which is not enough for extra actions that parse header files. Thus, re-run include
+   * scanning and add headers to the inputs of the extra action, too.
    */
   @Override
   public Iterable<Artifact> getInputFilesForExtraAction(
@@ -1286,13 +1251,19 @@ public class CppCompileAction extends AbstractAction
       return ImmutableList.of();
     }
 
-    // Use a set to eliminate duplicates.
-    ImmutableSet.Builder<Artifact> result = ImmutableSet.builder();
-    return result.addAll(getInputs()).addAll(scannedIncludes).build();
+    return Sets.<Artifact>difference(
+        ImmutableSet.<Artifact>copyOf(scannedIncludes), ImmutableSet.<Artifact>copyOf(getInputs()));
   }
 
   @Override
-  public String getMnemonic() { return "CppCompile"; }
+  public String getMnemonic() {
+    if (CppFileTypes.OBJC_SOURCE.matches(sourceFile.getExecPath())
+        || CppFileTypes.OBJCPP_SOURCE.matches(sourceFile.getExecPath())) {
+      return "ObjcCompile";
+    } else {
+      return "CppCompile";
+    }
+  }
 
   @Override
   public String describeKey() {

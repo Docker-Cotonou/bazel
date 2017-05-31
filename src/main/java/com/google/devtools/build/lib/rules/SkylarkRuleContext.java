@@ -42,13 +42,14 @@ import com.google.devtools.build.lib.packages.AspectDescriptor;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.ClassObjectConstructor;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SkylarkImplicitOutputsFunction;
+import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
 import com.google.devtools.build.lib.packages.OutputFile;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.SkylarkClassObject;
-import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.shell.ShellUtils;
@@ -234,7 +235,7 @@ public final class SkylarkRuleContext {
 
       this.artifactsLabelMap = artifactLabelMapBuilder.build();
       this.outputsObject =
-          SkylarkClassObjectConstructor.STRUCT.create(
+          NativeClassObjectConstructor.STRUCT.create(
               outputsBuilder,
               "No attribute '%s' in outputs. Make sure you declared a rule output with this name.");
 
@@ -344,6 +345,16 @@ public final class SkylarkRuleContext {
           || (type == BuildType.LABEL && a.hasSplitConfigurationTransition())) {
         List<?> allPrereq = ruleContext.getPrerequisites(a.getName(), Mode.DONT_CHECK);
         attrBuilder.put(skyname, SkylarkList.createImmutable(allPrereq));
+      } else if (type == BuildType.LABEL_KEYED_STRING_DICT) {
+        ImmutableMap.Builder<TransitiveInfoCollection, String> builder =
+            new ImmutableMap.Builder<>();
+        Map<Label, String> original = BuildType.LABEL_KEYED_STRING_DICT.cast(val);
+        List<? extends TransitiveInfoCollection> allPrereq =
+            ruleContext.getPrerequisites(a.getName(), Mode.DONT_CHECK);
+        for (TransitiveInfoCollection prereq : allPrereq) {
+          builder.put(prereq, original.get(prereq.getLabel()));
+        }
+        attrBuilder.put(skyname, SkylarkType.convertToSkylark(builder.build(), null));
       } else if (type == BuildType.LABEL_DICT_UNARY) {
         Map<Label, TransitiveInfoCollection> prereqsByLabel = new LinkedHashMap<>();
         for (TransitiveInfoCollection target
@@ -412,7 +423,7 @@ public final class SkylarkRuleContext {
       }
     }
 
-    return SkylarkClassObjectConstructor.STRUCT.create(
+    return NativeClassObjectConstructor.STRUCT.create(
         splitAttrInfos.build(),
         "No attribute '%s' in split_attr. Make sure that this attribute is defined with a "
           + "split configuration.");
@@ -439,21 +450,21 @@ public final class SkylarkRuleContext {
         ImmutableMap<Artifact, FilesToRunProvider> executableRunfilesMap) {
       this.ruleClassName = ruleClassName;
       attrObject =
-          SkylarkClassObjectConstructor.STRUCT.create(
+          NativeClassObjectConstructor.STRUCT.create(
               attrs,
               "No attribute '%s' in attr. Make sure you declared a rule attribute with this name.");
       executableObject =
-          SkylarkClassObjectConstructor.STRUCT.create(
+          NativeClassObjectConstructor.STRUCT.create(
               executables,
               "No attribute '%s' in executable. Make sure there is a label type attribute marked "
                   + "as 'executable' with this name");
       fileObject =
-          SkylarkClassObjectConstructor.STRUCT.create(
+          NativeClassObjectConstructor.STRUCT.create(
               singleFiles,
               "No attribute '%s' in file. Make sure there is a label type attribute marked "
                   + "as 'single_file' with this name");
       filesObject =
-          SkylarkClassObjectConstructor.STRUCT.create(
+          NativeClassObjectConstructor.STRUCT.create(
               files,
               "No attribute '%s' in files. Make sure there is a label or label_list type attribute "
                   + "with this name");
@@ -506,11 +517,18 @@ public final class SkylarkRuleContext {
     return ruleContext;
   }
 
-  private static final SkylarkClassObjectConstructor DEFAULT_PROVIDER =
-      SkylarkClassObjectConstructor.createNativeConstructable("default_provider");
+  private static final ClassObjectConstructor DEFAULT_PROVIDER =
+      new NativeClassObjectConstructor("default_provider") {
+        @Override
+        protected SkylarkClassObject createInstanceFromSkylark(Object[] args, Location loc) {
+          @SuppressWarnings("unchecked")
+          Map<String, Object> kwargs = (Map<String, Object>) args[0];
+          return new SkylarkClassObject(this, kwargs, loc);
+        }
+      };
 
   @SkylarkCallable(name = "default_provider", structField = true)
-  public static SkylarkClassObjectConstructor getDefaultProvider() {
+  public static ClassObjectConstructor getDefaultProvider() {
     return DEFAULT_PROVIDER;
   }
 
@@ -676,15 +694,20 @@ public final class SkylarkRuleContext {
   }
 
   @SkylarkCallable(structField = true,
-      name = "aspect_id",
-      doc = "Returns a string uniquely identifying this aspect"
-          + " Only available in aspect implementation functions.")
-  public String aspectId() throws EvalException {
+      name = "aspect_ids",
+      doc = "Returns a list ids for all aspects applied to the target."
+      + " Only available in aspect implementation functions.")
+  public ImmutableList<String> aspectIds() throws EvalException {
     if (ruleAttributesCollection == null) {
       throw new EvalException(
-          Location.BUILTIN, "'aspect' is only available in aspect implementations");
+          Location.BUILTIN, "'aspect_ids' is only available in aspect implementations");
     }
-    return aspectDescriptor.getDescription();
+
+    ImmutableList.Builder<String> result = ImmutableList.builder();
+    for (AspectDescriptor descriptor : ruleContext.getAspectDescriptors()) {
+      result.add(descriptor.getDescription());
+    }
+    return result.build();
   }
 
 

@@ -129,7 +129,7 @@ public final class CommandEnvironment {
     this.workspace = workspace;
     this.directories = workspace.getDirectories();
     this.commandId = null; // Will be set once we get the client environment
-    this.reporter = new Reporter();
+    this.reporter = new Reporter(eventBus);
     this.eventBus = eventBus;
     this.commandThread = commandThread;
     this.blazeModuleEnvironment = new BlazeModuleEnvironment();
@@ -206,11 +206,10 @@ public final class CommandEnvironment {
   }
 
   @VisibleForTesting
-  void updateClientEnv(List<Map.Entry<String, String>> clientEnvList, boolean ignoreClientEnv) {
+  void updateClientEnv(List<Map.Entry<String, String>> clientEnvList) {
     Preconditions.checkState(clientEnv.isEmpty());
 
-    Collection<Map.Entry<String, String>> env =
-        ignoreClientEnv ? System.getenv().entrySet() : clientEnvList;
+    Collection<Map.Entry<String, String>> env = clientEnvList;
     for (Map.Entry<String, String> entry : env) {
       clientEnv.put(entry.getKey(), entry.getValue());
     }
@@ -557,7 +556,7 @@ public final class CommandEnvironment {
     this.relativeWorkingDirectory = workingDirectory.relativeTo(workspace);
     this.workingDirectory = workingDirectory;
 
-    updateClientEnv(options.clientEnv, options.ignoreClientEnv);
+    updateClientEnv(options.clientEnv);
 
     // Fail fast in the case where a Blaze command forgets to install the package path correctly.
     skyframeExecutor.setActive(false);

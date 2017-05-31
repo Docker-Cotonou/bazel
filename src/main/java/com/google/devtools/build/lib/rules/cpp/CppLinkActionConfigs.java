@@ -32,7 +32,10 @@ public class CppLinkActionConfigs {
   }
 
   public static String getCppLinkActionConfigs(
-      CppLinkPlatform platform, Set<String> features, String cppLinkDynamicLibraryToolPath) {
+      CppLinkPlatform platform,
+      Set<String> features,
+      String cppLinkDynamicLibraryToolPath,
+      boolean supportsEmbeddedRuntimes) {
     String cppDynamicLibraryLinkerTool = "";
     if (!features.contains("dynamic_library_linker_tool")) {
       cppDynamicLibraryLinkerTool =
@@ -60,11 +63,11 @@ public class CppLinkActionConfigs {
                 "       tool_path: 'DUMMY_TOOL'",
                 "   }",
                 "   implies: 'symbol_counts'",
+                "   implies: 'strip_debug_symbols'",
                 "   implies: 'linkstamps'",
                 "   implies: 'output_execpath_flags_executable'",
-                "   implies: 'runtime_root_flags'",
+                "   implies: 'runtime_library_search_directories'",
                 "   implies: 'library_search_directories'",
-                "   implies: 'input_param_flags'",
                 "   implies: 'libraries_to_link'",
                 "   implies: 'force_pic_flags'",
                 "   implies: 'legacy_link_flags'",
@@ -79,12 +82,12 @@ public class CppLinkActionConfigs {
                 "   implies: 'build_interface_libraries'",
                 "   implies: 'dynamic_library_linker_tool'",
                 "   implies: 'symbol_counts'",
+                "   implies: 'strip_debug_symbols'",
                 "   implies: 'shared_flag'",
                 "   implies: 'linkstamps'",
                 "   implies: 'output_execpath_flags'",
-                "   implies: 'runtime_root_flags'",
+                "   implies: 'runtime_library_search_directories'",
                 "   implies: 'library_search_directories'",
-                "   implies: 'input_param_flags'",
                 "   implies: 'libraries_to_link'",
                 "   implies: 'legacy_link_flags'",
                 "   implies: 'linker_param_file'",
@@ -95,9 +98,9 @@ public class CppLinkActionConfigs {
                 "   tool {",
                 "       tool_path: 'DUMMY_TOOL'",
                 "   }",
-                "   implies: 'runtime_root_flags'",
+                "   implies: 'strip_debug_symbols'",
+                "   implies: 'runtime_library_search_directories'",
                 "   implies: 'library_search_directories'",
-                "   implies: 'input_param_flags'",
                 "   implies: 'libraries_to_link'",
                 "   implies: 'linker_param_file'",
                 "}",
@@ -107,9 +110,9 @@ public class CppLinkActionConfigs {
                 "   tool {",
                 "       tool_path: 'DUMMY_TOOL'",
                 "   }",
-                "   implies: 'runtime_root_flags'",
+                "   implies: 'strip_debug_symbols'",
+                "   implies: 'runtime_library_search_directories'",
                 "   implies: 'library_search_directories'",
-                "   implies: 'input_param_flags'",
                 "   implies: 'libraries_to_link'",
                 "   implies: 'linker_param_file'",
                 "}",
@@ -119,9 +122,9 @@ public class CppLinkActionConfigs {
                 "   tool {",
                 "       tool_path: 'DUMMY_TOOL'",
                 "   }",
-                "   implies: 'runtime_root_flags'",
+                "   implies: 'strip_debug_symbols'",
+                "   implies: 'runtime_library_search_directories'",
                 "   implies: 'library_search_directories'",
-                "   implies: 'input_param_flags'",
                 "   implies: 'libraries_to_link'",
                 "   implies: 'linker_param_file'",
                 "}",
@@ -131,9 +134,9 @@ public class CppLinkActionConfigs {
                 "   tool {",
                 "       tool_path: 'DUMMY_TOOL'",
                 "   }",
-                "   implies: 'runtime_root_flags'",
+                "   implies: 'strip_debug_symbols'",
+                "   implies: 'runtime_library_search_directories'",
                 "   implies: 'library_search_directories'",
-                "   implies: 'input_param_flags'",
                 "   implies: 'libraries_to_link'",
                 "   implies: 'linker_param_file'",
                 "}",
@@ -223,9 +226,9 @@ public class CppLinkActionConfigs {
                 "   }",
                 "}",
                 "feature {",
-                "   name: 'runtime_root_flags',",
+                "   name: 'runtime_library_search_directories',",
                 "   flag_set {",
-                "       expand_if_all_available: 'runtime_root_flags'",
+                "       expand_if_all_available: 'runtime_library_search_directories'",
                 "       action: 'c++-link-executable'",
                 "       action: 'c++-link-dynamic-library'",
                 "       action: 'c++-link-static-library'",
@@ -233,19 +236,19 @@ public class CppLinkActionConfigs {
                 "       action: 'c++-link-pic-static-library'",
                 "       action: 'c++-link-alwayslink-pic-static-library'",
                 "       flag_group {",
-                "           flag: '%{runtime_root_flags}'",
-                "       }",
-                "   }",
-                "   flag_set {",
-                "       expand_if_all_available: 'runtime_root_entries'",
-                "       action: 'c++-link-executable'",
-                "       action: 'c++-link-dynamic-library'",
-                "       action: 'c++-link-static-library'",
-                "       action: 'c++-link-alwayslink-static-library'",
-                "       action: 'c++-link-pic-static-library'",
-                "       action: 'c++-link-alwayslink-pic-static-library'",
-                "       flag_group {",
-                "           flag: '%{runtime_root_entries}'",
+                "           iterate_over: 'runtime_library_search_directories'",
+                "           flag_group {",
+                // TODO(b/27153401): This should probably be @loader_path on osx.
+                ifTrue(
+                    supportsEmbeddedRuntimes,
+                    "           expand_if_all_available: 'is_cc_test_link_action'",
+                    "           flag: ",
+                    "             '-Wl,-rpath,$EXEC_ORIGIN/%{runtime_library_search_directories}'",
+                    "       }",
+                    "       flag_group {",
+                    "           expand_if_all_available: 'is_not_cc_test_link_action'"),
+                "               flag: '-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}'",
+                "           }",
                 "       }",
                 "   }",
                 "}",
@@ -262,22 +265,6 @@ public class CppLinkActionConfigs {
                 "       flag_group {",
                 "           iterate_over: 'library_search_directories'",
                 "           flag: '-L%{library_search_directories}'",
-                "       }",
-                "   }",
-                "}",
-                "feature {",
-                "   name: 'input_param_flags'",
-                "   flag_set {",
-                "       expand_if_all_available: 'libopts'",
-                "       action: 'c++-link-executable'",
-                "       action: 'c++-link-dynamic-library'",
-                "       action: 'c++-link-static-library'",
-                "       action: 'c++-link-alwayslink-static-library'",
-                "       action: 'c++-link-pic-static-library'",
-                "       action: 'c++-link-alwayslink-pic-static-library'",
-                "       flag_group {",
-                "           iterate_over: 'libopts'",
-                "           flag: '%{libopts}'",
                 "       }",
                 "   }",
                 "}",
@@ -463,6 +450,18 @@ public class CppLinkActionConfigs {
                 "   }",
                 "}",
                 "feature {",
+                "   name: 'strip_debug_symbols'",
+                "   flag_set {",
+                "       action: 'c++-link-executable'",
+                "       action: 'c++-link-dynamic-library'",
+                "       action: 'c++-link-interface-dynamic-library'",
+                "       flag_group {",
+                "           expand_if_all_available: 'strip_debug_symbols'",
+                "           flag: '-Wl,-S'",
+                "       }",
+                "   }",
+                "}",
+                "feature {",
                 "   name: 'linker_param_file'",
                 "   flag_set {",
                 "       expand_if_all_available: 'linker_param_file'",
@@ -486,15 +485,15 @@ public class CppLinkActionConfigs {
   }
 
   private static String ifLinux(CppLinkPlatform platform, String... lines) {
-    if (platform == CppLinkPlatform.LINUX) {
-      return Joiner.on("\n").join(lines);
-    } else {
-      return "";
-    }
+    return ifTrue(platform == CppLinkPlatform.LINUX, lines);
   }
 
   private static String ifMac(CppLinkPlatform platform, String... lines) {
-    if (platform == CppLinkPlatform.MAC) {
+    return ifTrue(platform == CppLinkPlatform.MAC, lines);
+  }
+
+  private static String ifTrue(boolean condition, String... lines) {
+    if (condition) {
       return Joiner.on("\n").join(lines);
     } else {
       return "";

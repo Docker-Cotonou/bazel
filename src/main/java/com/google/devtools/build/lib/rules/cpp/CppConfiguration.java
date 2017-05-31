@@ -403,12 +403,12 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
 
     this.toolchainIdentifier = toolchain.getToolchainIdentifier();
 
+    this.supportsEmbeddedRuntimes = toolchain.getSupportsEmbeddedRuntimes();
     toolchain = addLegacyFeatures(toolchain);
     this.toolchainFeatures = new CcToolchainFeatures(toolchain);
     this.supportsGoldLinker = toolchain.getSupportsGoldLinker();
     this.supportsStartEndLib = toolchain.getSupportsStartEndLib();
     this.supportsInterfaceSharedObjects = toolchain.getSupportsInterfaceSharedObjects();
-    this.supportsEmbeddedRuntimes = toolchain.getSupportsEmbeddedRuntimes();
     this.supportsFission = toolchain.getSupportsFission();
     this.toolchainNeedsPic = toolchain.getNeedsPic();
     this.usePicForBinaries =
@@ -727,12 +727,12 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
           if (getTargetLibc().equals("macosx")) {
             TextFormat.merge(
                 CppLinkActionConfigs.getCppLinkActionConfigs(
-                    CppLinkPlatform.MAC, features, linkerToolPath),
+                    CppLinkPlatform.MAC, features, linkerToolPath, supportsEmbeddedRuntimes),
                 toolchainBuilder);
           } else {
             TextFormat.merge(
                 CppLinkActionConfigs.getCppLinkActionConfigs(
-                    CppLinkPlatform.LINUX, features, linkerToolPath),
+                    CppLinkPlatform.LINUX, features, linkerToolPath, supportsEmbeddedRuntimes),
                 toolchainBuilder);
           }
         }
@@ -1114,10 +1114,6 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
       PathFragment ldExecutable) {
     List<String> result = new ArrayList<>();
     result.addAll(commonLinkOptions);
-
-    if (stripBinaries) {
-      result.add("-Wl,-S");
-    }
 
     result.addAll(linkOptionsFromCompilationMode.get(compilationMode));
     result.addAll(linkOptionsFromLipoMode.get(lipoMode));
@@ -1636,11 +1632,11 @@ public class CppConfiguration extends BuildConfiguration.Fragment {
 
   public boolean isLipoOptimization() {
     // The LIPO optimization bits are set in the LIPO context collector configuration, too.
-    return cppOptions.isLipoOptimization() && !isLipoContextCollector();
+    return cppOptions.isLipoOptimization();
   }
 
   public boolean isLipoOptimizationOrInstrumentation() {
-    return cppOptions.isLipoOptimizationOrInstrumentation() && !isLipoContextCollector();
+    return cppOptions.isLipoOptimizationOrInstrumentation();
   }
 
   /**

@@ -28,10 +28,12 @@ import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
+import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
+import com.google.devtools.build.lib.actions.extra.SpawnInfo;
 import com.google.devtools.build.lib.analysis.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -45,23 +47,15 @@ import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction.DotdFile;
 import com.google.devtools.build.lib.rules.cpp.CppFileTypes;
 import com.google.devtools.build.lib.rules.cpp.HeaderDiscovery;
-import com.google.devtools.build.lib.rules.cpp.HeaderDiscovery.DotdPruningMode;
 import com.google.devtools.build.lib.rules.cpp.IncludeScanningContext;
 import com.google.devtools.build.lib.util.DependencySet;
 import com.google.devtools.build.lib.util.Fingerprint;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 
 /**
  * An action that compiles objc or objc++ source.
@@ -90,10 +84,14 @@ public class ObjcCompileAction extends SpawnAction {
 
     @Override
     public Iterable<? extends ActionInput> getInputFiles() {
-      return ImmutableList.<ActionInput>builder()
-          .addAll(super.getInputFiles())
-          .addAll(discoveredInputs)
-          .build();
+      ImmutableList.Builder<ActionInput> listBuilder =
+          ImmutableList.<ActionInput>builder().addAll(super.getInputFiles());
+      // Normally discoveredInputs should not be null when this is called, however that may occur if
+      // the extra action feature is used
+      if (discoveredInputs != null) {
+        listBuilder.addAll(discoveredInputs);
+      }
+      return listBuilder.build();
     }
   }
 
@@ -105,10 +103,6 @@ public class ObjcCompileAction extends SpawnAction {
   private final Artifact headersListFile;
 
   private Iterable<Artifact> discoveredInputs;
-
-  // This can be read/written from multiple threads, so accesses must be synchronized.
-  @GuardedBy("this")
-  private boolean inputsKnown = false;
 
   private static final String GUID = "a00d5bac-a72c-4f0f-99a7-d5fdc6072137";
 
@@ -135,7 +129,7 @@ public class ObjcCompileAction extends SpawnAction {
     super(
         owner,
         tools,
-        inputs,
+        headersListFile == null ? inputs : mandatoryInputs,
         outputs,
         resourceSet,
         argv,
@@ -152,7 +146,6 @@ public class ObjcCompileAction extends SpawnAction {
     this.sourceFile = sourceFile;
     this.mandatoryInputs = mandatoryInputs;
     this.dotdPruningPlan = dotdPruningPlan;
-    this.inputsKnown = (dotdPruningPlan == DotdPruningMode.DO_NOT_USE && headersListFile == null);
     this.headers = headers;
     this.headersListFile = headersListFile;
   }
@@ -161,9 +154,11 @@ public class ObjcCompileAction extends SpawnAction {
     ImmutableList.Builder<Artifact> inputs = ImmutableList.<Artifact>builder();
 
     for (Artifact headerArtifact : headers) {
-      if (CppFileTypes.OBJC_HEADER.matches(headerArtifact.getFilename())) {
+      if (CppFileTypes.OBJC_HEADER.matches(headerArtifact.getFilename())
+          // C++ headers can be extensionless
+          || (!headerArtifact.isFileset() && headerArtifact.getExtension().isEmpty())) {
           inputs.add(headerArtifact);
-        }
+      }
     }
     return inputs.build();
   }
@@ -172,11 +167,6 @@ public class ObjcCompileAction extends SpawnAction {
   @VisibleForTesting
   public HeaderDiscovery.DotdPruningMode getDotdPruningPlan() {
     return dotdPruningPlan;
-  }
-
-  @Override
-  public synchronized boolean inputsKnown() {
-    return inputsKnown;
   }
 
   @Override
@@ -193,98 +183,21 @@ public class ObjcCompileAction extends SpawnAction {
   public synchronized Iterable<Artifact> discoverInputs(
       ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
-    discoveredInputs = headersListFile != null ? findRequiredHeaderInputs() : filterHeaderFiles();
+    if (headersListFile != null) {
+      try {
+        discoveredInputs =
+            HeaderThinning.findRequiredHeaderInputs(
+                sourceFile, headersListFile, getAllowedDerivedInputsMap(false));
+      } catch (ExecException e) {
+        throw e.toActionExecutionException(
+            "Header thinning of rule '" + getOwner().getLabel() + "'",
+            actionExecutionContext.getExecutor().getVerboseFailures(),
+            this);
+      }
+    } else {
+      discoveredInputs = filterHeaderFiles();
+    }
     return discoveredInputs;
-  }
-
-  /** Reads the header scanning output file and discovers all those headers as outputs. */
-  private Iterable<Artifact> findRequiredHeaderInputs()
-      throws ActionExecutionException, InterruptedException {
-    try {
-      Map<PathFragment, Artifact> inputArtifactsMap = getAllowedDerivedInputsMap(false);
-      ImmutableList.Builder<Artifact> includeBuilder = ImmutableList.builder();
-      List<PathFragment> missing = new ArrayList<>();
-      for (String line :
-          FileSystemUtils.readLines(headersListFile.getPath(), StandardCharsets.UTF_8)) {
-        if (line.isEmpty()) {
-          continue;
-        }
-
-        PathFragment headerPath = new PathFragment(line);
-        Artifact header = inputArtifactsMap.get(headerPath);
-        if (header == null) {
-          missing.add(headerPath);
-        } else {
-          includeBuilder.add(header);
-        }
-      }
-
-      if (!missing.isEmpty()) {
-        includeBuilder.addAll(findRequiredHeaderInputsInTreeArtifacts(inputArtifactsMap, missing));
-      }
-      return includeBuilder.build();
-    } catch (IOException ex) {
-      throw new ActionExecutionException(
-          String.format("Error reading headers file %s", headersListFile.getExecPathString()),
-          ex,
-          this,
-          false);
-    }
-  }
-
-  /**
-   * Headers inside a TreeArtifact will not have their ExecPath as a key in the map as they do not
-   * have their own Artifact object. These headers must be mapped to their containing TreeArtifact.
-   * We are unable to select individual files from within a TreeArtifact so must discover the entire
-   * TreeArtifact as an input.
-   */
-  private Iterable<Artifact> findRequiredHeaderInputsInTreeArtifacts(
-      Map<PathFragment, Artifact> inputArtifactsMap, List<PathFragment> missing)
-      throws ActionExecutionException {
-    ImmutableList.Builder<Artifact> includeBuilder = ImmutableList.builder();
-    ImmutableList.Builder<PathFragment> treeArtifactPathsBuilder = ImmutableList.builder();
-    for (Entry<PathFragment, Artifact> inputEntry : inputArtifactsMap.entrySet()) {
-      if (inputEntry.getValue().isTreeArtifact()) {
-        treeArtifactPathsBuilder.add(inputEntry.getKey());
-      }
-    }
-
-    ImmutableList<PathFragment> treeArtifactPaths = treeArtifactPathsBuilder.build();
-    for (PathFragment missingPath : missing) {
-      includeBuilder.add(
-          findRequiredHeaderInputInTreeArtifacts(
-              treeArtifactPaths, inputArtifactsMap, missingPath));
-    }
-
-    return includeBuilder.build();
-  }
-
-  private Artifact findRequiredHeaderInputInTreeArtifacts(
-      ImmutableList<PathFragment> treeArtifactPaths,
-      Map<PathFragment, Artifact> inputArtifactsMap,
-      PathFragment missingPath)
-      throws ActionExecutionException {
-    for (PathFragment treeArtifactPath : treeArtifactPaths) {
-      if (missingPath.startsWith(treeArtifactPath)) {
-        return inputArtifactsMap.get(treeArtifactPath);
-      }
-    }
-
-    throw new ActionExecutionException(
-        String.format(
-            "Unable to map header file (%s) found during header scanning of %s."
-                + " This is usually the result of a case mismatch.",
-            missingPath, sourceFile.getExecPathString()),
-        this,
-        true);
-  }
-
-  @Override
-  public synchronized void updateInputs(Iterable<Artifact> inputs) {
-    inputsKnown = true;
-    synchronized (this) {
-      setInputs(inputs);
-    }
   }
 
   @Override
@@ -305,6 +218,12 @@ public class ObjcCompileAction extends SpawnAction {
               executor.getExecRoot(), scanningContext.getArtifactResolver());
 
       updateActionInputs(discoveredInputs);
+    } else {
+      // TODO(lberki): This is awkward, but necessary since updateInputs() must be called when
+      // input discovery is in effect. I *think* it's possible to avoid setting discoversInputs()
+      // to true if the header list file is null and then we'd not need to have this here, but I
+      // haven't quite managed to get that right yet.
+      updateActionInputs(getInputs());
     }
   }
 
@@ -363,20 +282,30 @@ public class ObjcCompileAction extends SpawnAction {
    *
    * @throws ActionExecutionException iff any errors happen during update.
    */
-  @VisibleForTesting
+  @VisibleForTesting  // productionVisibility = Visibility.PRIVATE
   @ThreadCompatible
-  public final synchronized void updateActionInputs(Iterable<Artifact> discoveredInputs)
+  final void updateActionInputs(Iterable<Artifact> discoveredInputs)
       throws ActionExecutionException {
-    inputsKnown = false;
-    Iterable<Artifact> inputs = Collections.emptyList();
     Profiler.instance().startTask(ProfilerTask.ACTION_UPDATE, this);
     try {
-      inputs = Iterables.concat(mandatoryInputs, discoveredInputs);
-      inputsKnown = true;
+      updateInputs(Iterables.concat(mandatoryInputs, discoveredInputs));
     } finally {
       Profiler.instance().completeTask(ProfilerTask.ACTION_UPDATE);
-      setInputs(inputs);
     }
+  }
+
+  @Override
+  protected SpawnInfo getExtraActionSpawnInfo() {
+    SpawnInfo.Builder info = SpawnInfo.newBuilder(super.getExtraActionSpawnInfo());
+    if (!inputsDiscovered()) {
+      for (Artifact headerArtifact : filterHeaderFiles()) {
+        // As in SpawnAction#getExtraActionSpawnInfo explicitly ignore middleman artifacts here.
+        if (!headerArtifact.isMiddlemanArtifact()) {
+          info.addInputFile(headerArtifact.getExecPathString());
+        }
+      }
+    }
+    return info.build();
   }
 
   @Override

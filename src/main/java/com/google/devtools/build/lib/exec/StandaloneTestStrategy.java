@@ -16,16 +16,13 @@ package com.google.devtools.build.lib.exec;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
-import com.google.devtools.build.lib.actions.BaseSpawn;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
-import com.google.devtools.build.lib.actions.ResourceManager;
-import com.google.devtools.build.lib.actions.ResourceManager.ResourceHandle;
-import com.google.devtools.build.lib.actions.ResourceSet;
+import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.TestExecException;
@@ -115,15 +112,20 @@ public class StandaloneTestStrategy extends TestStrategy {
     info.putAll(action.getTestProperties().getExecutionInfo());
 
     Spawn spawn =
-        new BaseSpawn(
+        new SimpleSpawn(
+            action,
             getArgs(COLLECT_COVERAGE, action),
-            env,
-            info,
+            ImmutableMap.copyOf(env),
+            ImmutableMap.copyOf(info),
             new RunfilesSupplierImpl(
                 runfilesDir.asFragment(), action.getExecutionSettings().getRunfiles()),
-            action,
-            action.getTestProperties().getLocalResourceUsage(executionOptions.usingLocalTestJobs()),
-            ImmutableSet.of(resolvedPaths.getXmlOutputPath().relativeTo(execRoot)));
+            /*inputs=*/ImmutableList.copyOf(action.getInputs()),
+            /*tools=*/ImmutableList.<Artifact>of(),
+            /*filesetManifests=*/ImmutableList.<Artifact>of(),
+            ImmutableList.copyOf(action.getSpawnOutputs()),
+            action
+                .getTestProperties()
+                .getLocalResourceUsage(executionOptions.usingLocalTestJobs()));
 
     Executor executor = actionExecutionContext.getExecutor();
 
@@ -168,7 +170,8 @@ public class StandaloneTestStrategy extends TestStrategy {
           .getEventBus()
           .post(
               new TestAttempt(
-                  action, attempt, data.getTestPassed(), testOutputsBuilder.build(), true));
+                  action, attempt, data.getTestPassed(), data.getRunDurationMillis(),
+                  testOutputsBuilder.build(), true));
       finalizeTest(actionExecutionContext, action, dataBuilder.build());
     } catch (IOException e) {
       executor.getEventHandler().handle(Event.error("Caught I/O exception: " + e));
@@ -209,7 +212,10 @@ public class StandaloneTestStrategy extends TestStrategy {
     dataBuilder.addAllTestProcessTimes(data.getTestProcessTimesList());
     executor
         .getEventBus()
-        .post(new TestAttempt(action, attempt, data.getTestPassed(), testOutputsBuilder.build()));
+        .post(
+            new TestAttempt(
+                action, attempt, data.getTestPassed(), data.getRunDurationMillis(),
+                testOutputsBuilder.build(), false));
     processTestOutput(executor, outErr, new TestResult(action, data, false), testLog);
   }
 
@@ -246,13 +252,10 @@ public class StandaloneTestStrategy extends TestStrategy {
       Path workingDirectory)
       throws IOException, ExecException, InterruptedException {
     prepareFileSystem(action, tmpDir, coverageDir, workingDirectory);
-    ResourceSet resources =
-        action.getTestProperties().getLocalResourceUsage(executionOptions.usingLocalTestJobs());
 
     try (FileOutErr fileOutErr =
             new FileOutErr(
-                action.getTestLog().getPath(), action.resolve(execRoot).getTestStderr());
-        ResourceHandle handle = ResourceManager.instance().acquireResources(action, resources)) {
+                action.getTestLog().getPath(), action.resolve(execRoot).getTestStderr())) {
       TestResultData data =
           executeTest(
               action,

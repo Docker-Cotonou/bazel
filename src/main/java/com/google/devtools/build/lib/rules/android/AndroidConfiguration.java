@@ -136,32 +136,22 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
    * Which APK signing method to use with the debug key for rules that build APKs.
    *
    * <ul>
-   * <li>LEGACY_V1 uses the signer inside the deprecated apkbuilder tool.
    * <li>V1 uses the apksigner attribute from the android_sdk and signs the APK as a JAR.
    * <li>V2 uses the apksigner attribute from the android_sdk and signs the APK according to the APK
    * Signing Schema V2 that is only supported on Android N and later.
    * </ul>
    */
   public enum ApkSigningMethod {
-    LEGACY_V1(true, false, false),
-    V1(false, true, false),
-    V2(false, false, true),
-    V1_V2(false, true, true);
+    V1(true, false),
+    V2(false, true),
+    V1_V2(true, true);
 
-    private final boolean signLegacy;
     private final boolean signV1;
     private final boolean signV2;
 
-    ApkSigningMethod(boolean signLegacy, boolean signV1, boolean signV2) {
-      // If signLegacy is true, the other two values will be ignored.
-      this.signLegacy = signLegacy;
+    ApkSigningMethod(boolean signV1, boolean signV2) {
       this.signV1 = signV1;
       this.signV2 = signV2;
-    }
-
-    /** Whether to sign with the signer inside the deprecated apkbuilder tool. */
-    public boolean signLegacy() {
-      return signLegacy;
     }
 
     /** Whether to JAR sign the APK with the apksigner tool. */
@@ -331,6 +321,18 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       help = "Do not use.")
     public boolean incrementalDexingForLiteProtos;
 
+    /**
+     * Whether to error out when we find Jar files when building binaries that weren't converted to
+     * a dex archive. Once this option works, we'll flip the default value in a config file, then
+     * once it is proven that it works, remove it from Bazel and said config file.
+     */
+    @Option(
+      name = "experimental_incremental_dexing_error_on_missed_jars",
+      defaultValue = "false",
+      category = "experimental",
+      help = "Do not use.")
+    public boolean incrementalDexingErrorOnMissedJars;
+
     @Option(name = "non_incremental_per_target_dexopts",
         converter = Converters.CommaSeparatedOptionListConverter.class,
         defaultValue = "--no-locals",
@@ -416,6 +418,22 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
         help = "Use SingleJar for multidex dex extraction.")
     public boolean useSingleJarForMultidex;
 
+    @Option(name = "experimental_android_use_resource_prefiltering",
+      defaultValue = "false",
+      category = "undocumented",
+      help = "When building android_binary targets, apply resource_configuration_filters during"
+          + " the analysis phase. Normally, this filtering doesn't occur until near the end of "
+          + "resource processing in the execution phase. Prefiltering resources improves "
+          + "performance for binaries with resource_configuration_filters and lots of resources."
+    )
+    public boolean useResourcePrefiltering;
+
+    @Option(name = "use_singlejar_for_proguard_libraryjars",
+        defaultValue = "false",
+        category = "undocumented",
+        help = "Use SingleJar to combine all ProGuard library jars.")
+    public boolean useSingleJarForProguardLibraryJars;
+
     @Override
     public void addAllLabels(Multimap<String, Label> labelMap) {
       if (androidCrosstoolTop != null) {
@@ -436,6 +454,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       host.incrementalDexing = incrementalDexing;
       host.incrementalDexingBinaries = incrementalDexingBinaries;
       host.incrementalDexingForLiteProtos = incrementalDexingForLiteProtos;
+      host.incrementalDexingErrorOnMissedJars = incrementalDexingErrorOnMissedJars;
       host.nonIncrementalPerTargetDexopts = nonIncrementalPerTargetDexopts;
       host.dexoptsSupportedInIncrementalDexing = dexoptsSupportedInIncrementalDexing;
       host.manifestMerger = manifestMerger;
@@ -484,6 +503,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   private final boolean jackSanityChecks;
   private final ImmutableSet<AndroidBinaryType> incrementalDexingBinaries;
   private final boolean incrementalDexingForLiteProtos;
+  private final boolean incrementalDexingErrorOnMissedJars;
   private final ImmutableList<String> dexoptsSupportedInIncrementalDexing;
   private final ImmutableList<String> targetDexoptsThatPreventIncrementalDexing;
   private final boolean desugarJava8;
@@ -495,6 +515,8 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
   private final ApkSigningMethod apkSigningMethod;
   private final boolean useSingleJarApkBuilder;
   private final boolean useSingleJarForMultidex;
+  private final boolean useResourcePrefiltering;
+  private final boolean useSingleJarForProguardLibraryJars;
 
   AndroidConfiguration(Options options, Label androidSdk) {
     this.sdk = androidSdk;
@@ -509,6 +531,7 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
       this.incrementalDexingBinaries = ImmutableSet.of();
     }
     this.incrementalDexingForLiteProtos = options.incrementalDexingForLiteProtos;
+    this.incrementalDexingErrorOnMissedJars = options.incrementalDexingErrorOnMissedJars;
     this.dexoptsSupportedInIncrementalDexing =
         ImmutableList.copyOf(options.dexoptsSupportedInIncrementalDexing);
     this.targetDexoptsThatPreventIncrementalDexing =
@@ -522,7 +545,9 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
     this.apkSigningMethod = options.apkSigningMethod;
     this.useSingleJarApkBuilder = options.useSingleJarApkBuilder;
     this.useSingleJarForMultidex = options.useSingleJarForMultidex;
+    this.useSingleJarForProguardLibraryJars = options.useSingleJarForProguardLibraryJars;
     this.useRexToCompressDexFiles = options.useRexToCompressDexFiles;
+    this.useResourcePrefiltering = options.useResourcePrefiltering;
   }
 
   public String getCpu() {
@@ -565,6 +590,14 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
    */
   public boolean incrementalDexingForLiteProtos() {
     return incrementalDexingForLiteProtos;
+  }
+
+  /**
+   * Returns whether to report an error when Jars that weren't converted to dex archives are part
+   * of an android binary.
+   */
+  public boolean incrementalDexingErrorOnMissedJars() {
+    return incrementalDexingErrorOnMissedJars;
   }
 
   /**
@@ -616,6 +649,14 @@ public class AndroidConfiguration extends BuildConfiguration.Fragment {
 
   public boolean useSingleJarForMultidex() {
     return useSingleJarForMultidex;
+  }
+
+  public boolean useResourcePrefiltering() {
+    return useResourcePrefiltering;
+  }
+
+  public boolean useSingleJarForProguardLibraryJars() {
+    return useSingleJarForProguardLibraryJars;
   }
 
   @Override

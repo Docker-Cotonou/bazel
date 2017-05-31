@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include "src/main/cpp/util/file_platform.h"
 
 #include <errno.h>
 #include <dirent.h>  // DIR, dirent, opendir, closedir
@@ -22,6 +21,7 @@
 #include <unistd.h>  // access, open, close, fsync
 #include <utime.h>   // utime
 
+#include <string>
 #include <vector>
 
 #include "src/main/cpp/util/errors.h"
@@ -135,8 +135,20 @@ class PosixPipe : public IPipe {
     return size >= 0 && write(_send_socket, buffer, size) == size;
   }
 
-  int Receive(void* buffer, int size) override {
-    return size < 0 ? -1 : read(_recv_socket, buffer, size);
+  int Receive(void *buffer, int size, int *error) override {
+    if (size < 0) {
+      if (error != nullptr) {
+        *error = IPipe::OTHER_ERROR;
+      }
+      return -1;
+    }
+    int result = read(_recv_socket, buffer, size);
+    if (error != nullptr) {
+      *error = result >= 0 ? IPipe::SUCCESS
+                           : ((errno == EINTR) ? IPipe::INTERRUPTED
+                                               : IPipe::OTHER_ERROR);
+    }
+    return result;
   }
 
  private:
@@ -175,32 +187,59 @@ pair<string, string> SplitPath(const string &path) {
   return std::make_pair(string(path, 0, pos), string(path, pos + 1));
 }
 
+int ReadFromHandle(file_handle_type fd, void *data, size_t size, int *error) {
+  int result = read(fd, data, size);
+  if (error != nullptr) {
+    if (result >= 0) {
+      *error = ReadFileResult::SUCCESS;
+    } else {
+      if (errno == EINTR) {
+        *error = ReadFileResult::INTERRUPTED;
+      } else if (errno == EAGAIN) {
+        *error = ReadFileResult::AGAIN;
+      } else {
+        *error = ReadFileResult::OTHER_ERROR;
+      }
+    }
+  }
+  return result;
+}
+
 bool ReadFile(const string &filename, string *content, int max_size) {
   int fd = open(filename.c_str(), O_RDONLY);
   if (fd == -1) return false;
-  bool result =
-      ReadFrom([fd](void *buf, int len) { return read(fd, buf, len); }, content,
-               max_size);
+  bool result = ReadFrom(fd, content, max_size);
   close(fd);
   return result;
 }
 
-bool WriteFile(const void *data, size_t size, const string &filename) {
+bool ReadFile(const string &filename, void *data, size_t size) {
+  int fd = open(filename.c_str(), O_RDONLY);
+  if (fd == -1) return false;
+  bool result = ReadFrom(fd, data, size);
+  close(fd);
+  return result;
+}
+
+bool WriteFile(const void *data, size_t size, const string &filename,
+               unsigned int perm) {
   UnlinkPath(filename);  // We don't care about the success of this.
-  int fd =
-      open(filename.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0755);  // chmod +x
+  int fd = open(filename.c_str(), O_CREAT | O_WRONLY | O_TRUNC, perm);
   if (fd == -1) {
     return false;
   }
-  bool result = WriteTo(
-      [fd](const void *buf, size_t bufsize) { return write(fd, buf, bufsize); },
-      data, size);
-  int saved_errno = errno;
+  int result = write(fd, data, size);
   if (close(fd)) {
     return false;  // Can fail on NFS.
   }
-  errno = saved_errno;  // Caller should see errno from write().
-  return result;
+  return result == static_cast<int>(size);
+}
+
+int WriteToStdOutErr(const void *data, size_t size, bool to_stdout) {
+  size_t r = fwrite(data, 1, size, to_stdout ? stdout : stderr);
+  return (r == size) ? WriteResult::SUCCESS
+                     : ((errno == EPIPE) ? WriteResult::BROKEN_PIPE
+                                         : WriteResult::OTHER_ERROR);
 }
 
 int RenameDirectory(const std::string &old_name, const std::string &new_name) {

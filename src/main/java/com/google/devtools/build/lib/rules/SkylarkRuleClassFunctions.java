@@ -49,8 +49,10 @@ import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.AttributeValueSource;
+import com.google.devtools.build.lib.packages.ClassObjectConstructor;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SkylarkImplicitOutputsFunctionWithCallback;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SkylarkImplicitOutputsFunctionWithMap;
+import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
 import com.google.devtools.build.lib.packages.Package.NameConflictException;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.PackageContext;
@@ -94,7 +96,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 /**
@@ -187,7 +188,7 @@ public class SkylarkRuleClassFunctions {
     extraKeywords = @Param(name = "kwargs", doc = "the struct attributes."),
     useLocation = true
   )
-  private static final SkylarkClassObjectConstructor struct = SkylarkClassObjectConstructor.STRUCT;
+  private static final ClassObjectConstructor struct = NativeClassObjectConstructor.STRUCT;
 
   // TODO(bazel-team): Move to a "testing" namespace module. Normally we'd pass an objectType
   // to @SkylarkSignature to do this, but that doesn't work here because we're exposing an already-
@@ -206,7 +207,7 @@ public class SkylarkRuleClassFunctions {
           + "<a href=\"globals.html#rule._skylark_testable\">_skylark_testable</a> set to "
           + "<code>True</code>."
   )
-  private static final SkylarkClassObjectConstructor actions = ActionsProvider.SKYLARK_CONSTRUCTOR;
+  private static final ClassObjectConstructor actions = ActionsProvider.SKYLARK_CONSTRUCTOR;
 
   @SkylarkSignature(name = "provider", returnType = SkylarkClassObjectConstructor.class, doc =
       "Creates a declared provider 'constructor'. The return value of this"
@@ -219,7 +220,7 @@ public class SkylarkRuleClassFunctions {
   private static final BuiltinFunction provider =
       new BuiltinFunction("provider") {
         public SkylarkClassObjectConstructor invoke(Location location) {
-          return SkylarkClassObjectConstructor.createSkylark(
+          return new SkylarkClassObjectConstructor(
               "<no name>", // name is set on export.
               location);
         }
@@ -589,12 +590,23 @@ public class SkylarkRuleClassFunctions {
             attributes.add(attribute);
           }
 
+          for (Object o : providesArg) {
+            if (!SkylarkAttr.isProvider(o)) {
+              throw new EvalException(ast.getLocation(),
+                  String.format("Illegal argument: element in 'provides' is of unexpected type. "
+                      + "Should be list of providers, but got %s. ",
+                      EvalUtils.getDataTypeName(o, true)));
+            }
+          }
+
           return new SkylarkAspect(
               implementation,
               attrAspects.build(),
               attributes.build(),
-              SkylarkAttr.buildProviderPredicate(requiredAspectProvidersArg),
-              ImmutableList.copyOf(STRING_LIST.convert(providesArg, "provides")),
+              SkylarkAttr.buildProviderPredicate(requiredAspectProvidersArg,
+                  "required_aspect_providers", ast.getLocation()
+              ),
+              SkylarkAttr.getSkylarkProviderIdentifiers(providesArg, ast.getLocation()),
               requiredParams.build(),
               ImmutableSet.copyOf(fragments.getContents(String.class, "fragments")),
               ImmutableSet.copyOf(hostFragments.getContents(String.class, "host_fragments")),
@@ -684,7 +696,6 @@ public class SkylarkRuleClassFunctions {
       }
       for (Pair<String, SkylarkAttr.Descriptor> attribute : attributes) {
         SkylarkAttr.Descriptor descriptor = attribute.getSecond();
-        descriptor.exportAspects(definitionLocation);
 
         addAttribute(definitionLocation, builder,
             descriptor.build(attribute.getFirst()));
@@ -719,25 +730,6 @@ public class SkylarkRuleClassFunctions {
           SkylarkClassObjectConstructor.class,
           SkylarkAspect.class,
           RuleFunction.class);
-
-  public static void exportRuleFunctionsAndAspects(Environment env, Label skylarkLabel)
-      throws EvalException {
-    Set<String> globalNames = env.getGlobals().getDirectVariableNames();
-
-    for (Class<? extends SkylarkExportable> exportable : EXPORTABLES) {
-      for (String name : globalNames) {
-        Object value = env.lookup(name);
-        if (value == null) {
-          throw new AssertionError(String.format("No such variable: '%s'", name));
-        }
-        if (exportable.isInstance(value)) {
-          if (!exportable.cast(value).isExported()) {
-            exportable.cast(value).export(skylarkLabel, name);
-          }
-        }
-      }
-    }
-  }
 
   @SkylarkSignature(
     name = "Label",

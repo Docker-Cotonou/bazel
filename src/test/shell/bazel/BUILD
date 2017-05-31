@@ -69,7 +69,6 @@ sh_test(
     data = [
         ":test-deps",
     ],
-    tags = ["manual"],
 )
 
 sh_test(
@@ -147,6 +146,7 @@ sh_test(
         "//src:darwin": [],
         "//src:darwin_x86_64": [],
         "//src:windows": [],
+        "//src:windows_msys": [],
         "//src:windows_msvc": [],
         "//conditions:default": ["//src/test/shell/bazel/testdata:bazel_toolchain_test_project_pkg"],
     }),
@@ -399,7 +399,7 @@ sh_test(
 
 sh_test(
     name = "bazel_bootstrap_distfile_test",
-    size = "large",
+    timeout = "eternal",
     srcs = ["bazel_bootstrap_distfile_test.sh"],
     args = ["$(location //:bazel-distfile)"],
     data = [

@@ -37,10 +37,20 @@ EOF
 exit 1
 EOF
   chmod 755 pkg/false.sh
+  cat > pkg/slowtest.sh <<EOF
+#!/bin/sh
+sleep 1
+exit 0
+EOF
+  chmod 755 pkg/slowtest.sh
   cat > pkg/BUILD <<EOF
 sh_test(
   name = "true",
   srcs = ["true.sh"],
+)
+sh_test(
+  name = "slow",
+  srcs = ["slowtest.sh"],
 )
 test_suite(
   name = "suite",
@@ -56,7 +66,26 @@ genrule(
   outs = ["fails_to_build.txt"],
   cmd = "false",
 )
+genrule(
+  name = "output_files_and_tags",
+  outs = ["out1.txt"],
+  cmd = "echo foo > \\"\$@\\"",
+  tags = ["tag1", "tag2"]
+)
 EOF
+cat > simpleaspect.bzl <<EOF
+def _simple_aspect_impl(target, ctx):
+    for orig_out in ctx.rule.attr.outs:
+        aspect_out = ctx.new_file(orig_out.name + ".aspect")
+        ctx.file_action(
+            output=aspect_out,
+            content = "Hello from aspect")
+    return struct(output_groups={
+        "aspect-out" : set([aspect_out]) })
+
+simple_aspect = aspect(implementation=_simple_aspect_impl)
+EOF
+touch BUILD
 }
 
 #### TESTS #############################################################
@@ -69,6 +98,10 @@ function test_basic() {
   bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
     || fail "bazel test failed"
   expect_log 'pkg:true'
+  # Build Finished
+  expect_log 'build_finished'
+  expect_log 'overall_success: true'
+  expect_log 'finish_time'
   expect_not_log 'aborted'
 }
 
@@ -84,11 +117,15 @@ function test_test_summary() {
   # Requesting a test, we expect
   # - precisely one test summary (for the single test we run)
   # - that is properly chained (no additional progress events)
+  # - the correct overall status being reported
   bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
     || fail "bazel test failed"
   expect_log_once '^test_summary '
   expect_log_once '^progress '
   expect_not_log 'aborted'
+  expect_log_once 'status.*PASSED'
+  expect_not_log 'status.*FAILED'
+  expect_not_log 'status.*FLAKY'
 }
 
 function test_test_inidivual_results() {
@@ -110,12 +147,17 @@ function test_test_attempts() {
   # Run a failing test declared as flaky.
   # We expect to see 3 attempts to happen, and also find the 3 xml files
   # mentioned in the stream.
+  # Moreover, as the test consistently fails, we expect the overall status
+  # to be reported as failure.
   ( bazel test --experimental_build_event_text_file=$TEST_log pkg:flaky \
     && fail "test failure expected" ) || true
   expect_log 'attempt.*1$'
   expect_log 'attempt.*2$'
   expect_log 'attempt.*3$'
   expect_log_once '^test_summary '
+  expect_log_once 'status.*FAILED'
+  expect_not_log 'status.*PASSED'
+  expect_not_log 'status.*FLAKY'
   expect_log_once '^progress '
   expect_not_log 'aborted'
   expect_log '^test_result'
@@ -125,6 +167,18 @@ function test_test_attempts() {
   expect_log 'flaky/.*test.xml'
   expect_log 'name:.*test.log'
   expect_log 'name:.*test.xml'
+}
+
+function test_test_runtime() {
+  bazel test --experimental_build_event_text_file=$TEST_log pkg:slow \
+    || fail "bazel test failed"
+  expect_log 'pkg:slow'
+  expect_log '^test_result'
+  expect_log 'test_attempt_duration_millis.*[1-9]'
+  expect_log 'build_finished'
+  expect_log 'overall_success: true'
+  expect_log 'finish_time'
+  expect_not_log 'aborted'
 }
 
 function test_test_attempts_multi_runs() {
@@ -173,6 +227,26 @@ function test_cached_test_results() {
   expect_not_log 'aborted'
 }
 
+function test_target_complete() {
+  bazel build --verbose_failures --experimental_build_event_text_file=$TEST_log \
+  pkg:output_files_and_tags || fail "bazel build failed"
+  expect_log 'output_group'
+  expect_log 'out1.txt'
+  expect_log 'tag1'
+  expect_log 'tag2'
+}
+
+function test_aspect_artifacts() {
+  bazel build --experimental_build_event_text_file=$TEST_log \
+    --aspects=simpleaspect.bzl%simple_aspect \
+    --output_groups=aspect-out \
+    pkg:output_files_and_tags || fail "bazel build failed"
+  expect_log 'aspect.*simple_aspect'
+  expect_log 'name.*aspect-out'
+  expect_log 'name.*out1.txt.aspect'
+  expect_not_log 'aborted'
+}
+
 function test_build_only() {
   # When building but not testing a test, there won't be a test summary
   # (as nothing was tested), so it should not be announced.
@@ -182,6 +256,10 @@ function test_build_only() {
   expect_not_log 'aborted'
   expect_not_log 'test_summary '
   expect_log_once '^progress'
+  # Build Finished
+  expect_log 'build_finished'
+  expect_log 'overall_success: true'
+  expect_log 'finish_time'
 }
 
 function test_build_test_suite() {
@@ -216,6 +294,28 @@ function test_root_cause_early() {
   local ncomplete=`grep -n '^completed' $TEST_log | cut -f 1 -d :`
   [ $naction -lt $ncomplete ] \
       || fail "failed action not before compelted target"
+}
+
+function test_loading_failure() {
+  # Verify that if loading fails, this is properly reported as the
+  # reason for the target expansion event not resulting in targets
+  # being expanded.
+  (bazel build --experimental_build_event_text_file=$TEST_log \
+         //does/not/exist && fail "build failure expected") || true
+  expect_log_once '^progress '
+  expect_log_once '^loading_failed'
+  expect_log 'details.*BUILD file not found on package path'
+  expect_not_log 'expanded'
+  expect_not_log 'aborted'
+}
+
+function test_loading_failure_keep_going() {
+  (bazel build --experimental_build_event_text_file=$TEST_log \
+         -k //does/not/exist && fail "build failure expected") || true
+  expect_log_once '^loading_failed'
+  expect_log_once '^expanded'
+  expect_log 'details.*BUILD file not found on package path'
+  expect_not_log 'aborted'
 }
 
 run_suite "Integration tests for the build event stream"

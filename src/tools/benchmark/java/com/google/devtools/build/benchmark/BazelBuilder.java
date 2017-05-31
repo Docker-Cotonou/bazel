@@ -20,6 +20,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.shell.CommandResult;
+import com.google.devtools.build.lib.vfs.FileSystem;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,6 +37,7 @@ import java.util.regex.Pattern;
 class BazelBuilder implements Builder {
 
   private static final Logger logger = Logger.getLogger(BazelBuilder.class.getName());
+  private static final FileSystem fileSystem = new JavaIoFileSystem();
 
   private static final String BAZEL_BINARY_PATH = "bazel-bin/src/bazel";
   private static final Pattern ELAPSED_TIME_PATTERN = Pattern.compile("(?<=Elapsed time: )[0-9.]+");
@@ -115,7 +119,7 @@ class BazelBuilder implements Builder {
 
   @Override
   public void clean() throws CommandException {
-    String[] cleanCommand = {"bazel", "clean"};
+    String[] cleanCommand = {"bazel", "clean", "--expunge"};
     Command cmd = new Command(cleanCommand, null, generatedCodeDir.toFile());
     cmd.execute();
   }
@@ -142,14 +146,24 @@ class BazelBuilder implements Builder {
         "--before", dateFilter.getToString(), "--pretty=format:%H", "--reverse");
   }
 
+  @Override
+  public ImmutableList<String> getDatetimeForCodeVersions(ImmutableList<String> codeVersions)
+      throws CommandException {
+    return getListOfOutputFromCommandWithAdditionalParam(codeVersions,
+        "git", "show", "-s",
+        "--date=iso", "--pretty=format:%cd", "--date=format:%Y-%m-%d %H:%M:%S");
+  }
+
   void prepareFromGitRepo(String gitRepo) throws IOException, CommandException {
-    if (builderDir.toFile().exists() && !builderDir.toFile().isDirectory()) {
+    // Try to pull git repo first, delete directory if failed.
+    if (builderDir.toFile().isDirectory()) {
       try {
-        Files.delete(builderDir);
-      } catch (IOException e) {
-        throw new IOException(builderDir + " is a file and cannot be deleted", e);
+        pullGitRepo();
+      } catch (CommandException e) {
+        FileSystemUtils.deleteTree(fileSystem.getPath(builderDir.toString()));
       }
     }
+
     if (Files.notExists(builderDir)) {
       try {
         Files.createDirectories(builderDir);
@@ -164,11 +178,26 @@ class BazelBuilder implements Builder {
     // Assume the directory is what we need if not empty
   }
 
+  private void pullGitRepo() throws CommandException {
+    String[] gitCloneCommand = {"git", "pull"};
+    Command cmd = new Command(gitCloneCommand, null, builderDir.toFile());
+    cmd.execute();
+  }
+
   private ImmutableList<String> getListOfOutputFromCommand(String... command)
       throws CommandException{
     Command cmd = new Command(command, null, builderDir.toFile());
     CommandResult result = cmd.execute();
     String output = new String(result.getStdout(), UTF_8).trim();
     return ImmutableList.copyOf(output.split("\n"));
+  }
+
+  private ImmutableList<String> getListOfOutputFromCommandWithAdditionalParam(
+      ImmutableList<String> additionalParam, String... command) throws CommandException{
+    ImmutableList<String> commandList =
+        ImmutableList.<String>builder().add(command).addAll(additionalParam).build();
+    String[] finalCommand = commandList.toArray(new String[0]);
+
+    return getListOfOutputFromCommand(finalCommand);
   }
 }

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <errno.h>  // errno, ENAMETOOLONG
 #include <fcntl.h>
-#include <limits.h>
 #include <stdarg.h>  // va_start, va_end, va_list
 
 #ifndef COMPILER_MSVC
+#include <errno.h>
+#include <limits.h>
 #include <sys/cygwin.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -33,6 +33,7 @@
 #include <io.h>  // _open
 #endif  // COMPILER_MSVC
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -386,7 +387,7 @@ static void CreateCommandLine(CmdLine* result, const string& exe,
     if (first) {
       first = false;
       // Skip first argument, instead use quoted executable name.
-      cmdline << '\"' << exe << '\"';
+      cmdline << '\"' << short_exe << '\"';
       continue;
     } else {
       cmdline << ' ';
@@ -519,6 +520,7 @@ string GetJvmVersion(const string& java_exe) {
   return ReadJvmVersion(result);
 }
 
+#ifndef COMPILER_MSVC
 // If we pass DETACHED_PROCESS to CreateProcess(), cmd.exe appropriately
 // returns the command prompt when the client terminates. msys2, however, in
 // its infinite wisdom, waits until the *server* terminates and cannot be
@@ -527,10 +529,6 @@ string GetJvmVersion(const string& java_exe) {
 // So, we first pretend to be a POSIX daemon so that msys2 knows about our
 // intentions and *then* we call CreateProcess(). Life ain't easy.
 static bool DaemonizeOnWindows() {
-#ifdef COMPILER_MSVC
-  // TODO(bazel-team) 2016-11-18: implement this.
-  return false;
-#else  // not COMPILER_MSVC
   if (fork() > 0) {
     // We are the original client process.
     return true;
@@ -547,8 +545,8 @@ static bool DaemonizeOnWindows() {
   // descriptors here. CreateProcess() will take care of that and it's useful
   // to see the error messages in ExecuteDaemon() on the console of the client.
   return false;
-#endif  // COMPILER_MSVC
 }
+#endif  // not COMPILER_MSVC
 
 // Keeping an eye on the server process on Windows is not implemented yet.
 // TODO(lberki): Implement this, because otherwise if we can't start up a server
@@ -563,11 +561,15 @@ class DummyBlazeServerStartup : public BlazeServerStartup {
 void ExecuteDaemon(const string& exe, const std::vector<string>& args_vector,
                    const string& daemon_output, const string& server_dir,
                    BlazeServerStartup** server_startup) {
+#ifdef COMPILER_MSVC
+  *server_startup = new DummyBlazeServerStartup();
+#else   // not COMPILER_MSVC
   if (DaemonizeOnWindows()) {
     // We are the client process
     *server_startup = new DummyBlazeServerStartup();
     return;
   }
+#endif  // COMPILER_MSVC
 
   wstring wdaemon_output;
   if (!blaze_util::AsWindowsPathWithUncPrefix(daemon_output, &wdaemon_output)) {
@@ -660,7 +662,9 @@ void ExecuteDaemon(const string& exe, const std::vector<string>& args_vector,
   CloseHandle(processInfo.hProcess);
   CloseHandle(processInfo.hThread);
 
+#ifndef COMPILER_MSVC
   exit(0);
+#endif  // COMPILER_MSVC
 }
 
 void BatchWaiterThread(HANDLE java_handle) {
@@ -710,13 +714,16 @@ static bool IsFailureDueToNestedJobsNotSupported(HANDLE process) {
       || version_info.dwMajorVersion == 6 && version_info.dwMinorVersion <= 1;
 }
 
-// Run the given program in the current working directory,
-// using the given argument vector.
+// Run the given program in the current working directory, using the given
+// argument vector, wait for it to finish, then exit ourselves with the exitcode
+// of that program.
 void ExecuteProgram(const string& exe, const std::vector<string>& args_vector) {
   CmdLine cmdline;
   CreateCommandLine(&cmdline, exe, args_vector);
 
   STARTUPINFOA startupInfo = {0};
+  startupInfo.cb = sizeof(STARTUPINFOA);
+
   PROCESS_INFORMATION processInfo = {0};
 
   // Propagate BAZEL_SH environment variable to a sub-process.
@@ -726,18 +733,17 @@ void ExecuteProgram(const string& exe, const std::vector<string>& args_vector) {
 
   HANDLE job = CreateJobObject(NULL, NULL);
   if (job == NULL) {
-    pdie(255, "Error %u while creating job\n", GetLastError());
+    pdie(255, "ExecuteProgram/CreateJobObject: error %u\n", GetLastError());
   }
 
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info = { 0 };
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info = {0};
   job_info.BasicLimitInformation.LimitFlags =
       JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-  if (!SetInformationJobObject(
-      job,
-      JobObjectExtendedLimitInformation,
-      &job_info,
-      sizeof(job_info))) {
-    pdie(255, "Error %u while setting up job\n", GetLastError());
+
+  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                               &job_info, sizeof(job_info))) {
+    pdie(255, "ExecuteProgram/SetInformationJobObject: error %u\n",
+         GetLastError());
   }
 
   BOOL success = CreateProcessA(
@@ -746,10 +752,7 @@ void ExecuteProgram(const string& exe, const std::vector<string>& args_vector) {
       /* lpProcessAttributes */ NULL,
       /* lpThreadAttributes */ NULL,
       /* bInheritHandles */ TRUE,
-      /* dwCreationFlags */
-      CREATE_NEW_PROCESS_GROUP         // So that Ctrl-Break does not affect it
-          | CREATE_BREAKAWAY_FROM_JOB  // We'll put it in a new job
-          | CREATE_SUSPENDED,  // So that it doesn't start a new job itself
+      /* dwCreationFlags */ CREATE_SUSPENDED,
       /* lpEnvironment */ NULL,
       /* lpCurrentDirectory */ NULL,
       /* lpStartupInfo */ &startupInfo,
@@ -760,18 +763,22 @@ void ExecuteProgram(const string& exe, const std::vector<string>& args_vector) {
          GetLastError(), cmdline.cmdline);
   }
 
-  if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
-    if (!IsFailureDueToNestedJobsNotSupported(processInfo.hProcess)) {
-      pdie(255, "Error %u while assigning process to job\n", GetLastError());
-    }
-
-    // Otherwise, the OS doesn't support nested jobs so we'll just have to
-    // make do without.
+  // We will try to put the launched process into a Job object. This will make
+  // Windows reliably kill all child processes that the process itself may
+  // launch once the process exits. On Windows systems that don't support nested
+  // jobs, this may fail if we are already running inside a job ourselves. In
+  // this case, we'll continue anyway, because we assume that our parent is
+  // handling process management for us.
+  if (!AssignProcessToJobObject(job, processInfo.hProcess) &&
+      !IsFailureDueToNestedJobsNotSupported(processInfo.hProcess)) {
+    pdie(255, "ExecuteProgram/AssignProcessToJobObject: error %u\n",
+         GetLastError());
   }
 
-  // Now that we put the process in a new job object, we can start executing it
+  // Now that we potentially put the process into a new job object, we can start
+  // running it.
   if (ResumeThread(processInfo.hThread) == -1) {
-    pdie(255, "Error %u while starting Java process\n", GetLastError());
+    pdie(255, "ExecuteProgram/ResumeThread: error %u\n", GetLastError());
   }
 
   // msys doesn't deliver signals while a Win32 call is pending so we need to
@@ -797,6 +804,18 @@ void ExecuteProgram(const string& exe, const std::vector<string>& args_vector) {
 
 string ListSeparator() { return ";"; }
 
+string PathAsJvmFlag(const string& path) {
+  string spath;
+  if (!blaze_util::AsShortWindowsPath(path, &spath)) {
+    pdie(255, "PathAsJvmFlag(%s): AsShortWindowsPath failed", path.c_str());
+  }
+  // Convert backslashes to forward slashes, in order to avoid the JVM parsing
+  // Windows paths as if they contained escaped characters.
+  // See https://github.com/bazelbuild/bazel/issues/2576
+  std::replace(spath.begin(), spath.end(), '\\', '/');
+  return spath;
+}
+
 string ConvertPath(const string& path) {
 #ifdef COMPILER_MSVC
   // This isn't needed when the binary isn't linked against msys-2.0.dll (when
@@ -818,6 +837,11 @@ string ConvertPath(const string& path) {
 
 // Convert a Unix path list to Windows path list
 string ConvertPathList(const string& path_list) {
+#ifdef COMPILER_MSVC
+  // In the MSVC version we use the actual %PATH% value which is separated by
+  // ";" and contains Windows paths.
+  return path_list;
+#else   // not COMPILER_MSVC
   string w_list = "";
   int start = 0;
   int pos;
@@ -829,6 +853,7 @@ string ConvertPathList(const string& path_list) {
     w_list += ConvertPath(path_list.substr(start));
   }
   return w_list;
+#endif  // COMPILER_MSVC
 }
 
 static string ConvertPathToPosix(const string& win_path) {
@@ -945,26 +970,18 @@ bool ReadDirectorySymlink(const string &posix_name, string* result) {
   }
 }
 
-// TODO(laszlocsomor): use IsAbsolute from file_windows.cc
-static bool IsAbsoluteWindowsPath(const string& p) {
-  if (p.size() < 3) {
-    return false;
-  }
-
-  if (p.substr(1, 2) == ":/") {
-    return true;
-  }
-
-  if (p.substr(1, 2) == ":\\") {
-    return true;
-  }
-
-  return false;
-}
-
 bool CompareAbsolutePaths(const string& a, const string& b) {
-  string a_real = IsAbsoluteWindowsPath(a) ? ConvertPathToPosix(a) : a;
-  string b_real = IsAbsoluteWindowsPath(b) ? ConvertPathToPosix(b) : b;
+  // `a` and `b` may not be Windows-style and may not be normalized, so convert
+  // them both before comparing them.
+  wstring a_real, b_real;
+  if (!blaze_util::AsWindowsPathWithUncPrefix(a, &a_real)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "CompareAbsolutePaths(a=%s, b=%s)", a.c_str(), b.c_str());
+  }
+  if (!blaze_util::AsWindowsPathWithUncPrefix(b, &b_real)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "CompareAbsolutePaths(a=%s, b=%s)", a.c_str(), b.c_str());
+  }
   return a_real == b_real;
 }
 
@@ -982,9 +999,9 @@ bool KillServerProcess(int pid) {
     return false;
   }
 
-  bool result = TerminateProcess(process, /*uExitCode*/0);
+  BOOL result = TerminateProcess(process, /*uExitCode*/ 0);
   if (!result) {
-    fprintf(stderr, "Cannot terminate server process with PID %d\n", pid);
+    blaze_util::PrintError("Cannot terminate server process with PID %d", pid);
   }
 
   CloseHandle(process);

@@ -18,8 +18,6 @@ import com.google.testing.junit.runner.internal.StackTraces;
 import com.google.testing.junit.runner.junit4.JUnit4InstanceModules.Config;
 import com.google.testing.junit.runner.junit4.JUnit4InstanceModules.SuiteClass;
 import com.google.testing.junit.runner.junit4.JUnit4Runner;
-import com.google.testing.junit.runner.model.AntXmlResultWriter;
-import com.google.testing.junit.runner.model.XmlResultWriter;
 import java.io.PrintStream;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
@@ -198,20 +196,6 @@ public class BazelTestRunner {
       if (interrupted) {
         Thread.currentThread().interrupt();
       }
-    }
-  }
-
-  static class BazelTestRunnerModule {
-    static XmlResultWriter resultWriter(AntXmlResultWriter impl) {
-      return impl;
-    }
-
-    static PrintStream stdoutStream() {
-      return System.out;
-    }
-
-    static PrintStream stderrStream() {
-      return System.err;
     }
   }
 }

@@ -53,6 +53,35 @@ IFileMtime *CreateFileMtime();
 // Split a path to dirname and basename parts.
 std::pair<std::string, std::string> SplitPath(const std::string &path);
 
+#if defined(COMPILER_MSVC) || defined(__CYGWIN__)
+// We cannot include <windows.h> because it #defines many symbols that conflict
+// with our function names, e.g. GetUserName, SendMessage.
+// Instead of typedef'ing HANDLE, let's use the actual type, void*. If that ever
+// changes in the future and HANDLE would no longer be compatible with void*
+// (very unlikely, given how fundamental this type is in Windows), then we'd get
+// a compilation error.
+typedef /* HANDLE */ void *file_handle_type;
+#else   // !(defined(COMPILER_MSVC) || defined(__CYGWIN__))
+typedef int file_handle_type;
+#endif  // defined(COMPILER_MSVC) || defined(__CYGWIN__)
+
+// Result of a `ReadFromHandle` operation.
+//
+// This is a platform-independent abstraction of `errno`. If you need to handle
+// an errno value, add an entry here and update the platform-specific
+// `ReadFromHandle` implementations accordingly.
+struct ReadFileResult {
+  enum Errors {
+    SUCCESS = 0,
+    OTHER_ERROR = 1,
+    INTERRUPTED = 2,
+    AGAIN = 3,
+  };
+};
+
+int ReadFromHandle(file_handle_type handle, void *data, size_t size,
+                   int *error);
+
 // Replaces 'content' with contents of file 'filename'.
 // If `max_size` is positive, the method reads at most that many bytes;
 // otherwise the method reads the whole file.
@@ -60,9 +89,36 @@ std::pair<std::string, std::string> SplitPath(const std::string &path);
 bool ReadFile(const std::string &filename, std::string *content,
               int max_size = 0);
 
-// Writes 'content' into file 'filename', and makes it executable.
+// Reads up to `size` bytes from the file `filename` into `data`.
+// There must be enough memory allocated at `data`.
+// Returns true on success, false on error.
+bool ReadFile(const std::string &filename, void *data, size_t size);
+
+// Writes `size` bytes from `data` into file `filename` and chmods it to `perm`.
 // Returns false on failure, sets errno.
-bool WriteFile(const std::string &content, const std::string &filename);
+bool WriteFile(const void *data, size_t size, const std::string &filename,
+               unsigned int perm = 0755);
+
+// Result of a `WriteToStdOutErr` operation.
+//
+// This is a platform-independent abstraction of `errno`. If you need to handle
+// an errno value, add an entry here and update the platform-specific
+// `WriteToStdOutErr` implementations accordingly.
+struct WriteResult {
+  enum Errors {
+    SUCCESS = 0,
+    OTHER_ERROR = 1,  // some uncategorized error occurred
+    BROKEN_PIPE = 2,  // EPIPE (reading end of the pipe is closed)
+  };
+};
+
+// Writes `size` bytes from `data` into stdout/stderr.
+// Writes to stdout if `to_stdout` is true, writes to stderr otherwise.
+// Returns one of `WriteResult::Errors`.
+//
+// This is a platform-independent abstraction of `fwrite` with `errno` checking
+// and awareness of pipes (i.e. in case stderr/stdout is connected to a pipe).
+int WriteToStdOutErr(const void *data, size_t size, bool to_stdout);
 
 enum RenameDirectoryResult {
   kRenameDirectorySuccess = 0,
@@ -149,10 +205,13 @@ void ForEachDirectoryEntry(const std::string &path,
 
 #if defined(COMPILER_MSVC) || defined(__CYGWIN__)
 // Like `AsWindowsPath` but the result is absolute and has UNC prefix if needed.
-bool AsWindowsPathWithUncPrefix(const std::string &path, std::wstring *wpath);
+bool AsWindowsPathWithUncPrefix(const std::string &path, std::wstring *wpath,
+                                size_t max_path = 260 /* MAX_PATH */);
 
 // Same as `AsWindowsPath`, but returns a lowercase 8dot3 style shortened path.
-// Result will never have a UNC prefix.
+// Result will never have a UNC prefix, nor a trailing "/" or "\".
+// Works also for non-existent paths; shortens as much of them as it can.
+// Also works for non-existent drives.
 bool AsShortWindowsPath(const std::string &path, std::string *result);
 #endif  // defined(COMPILER_MSVC) || defined(__CYGWIN__)
 

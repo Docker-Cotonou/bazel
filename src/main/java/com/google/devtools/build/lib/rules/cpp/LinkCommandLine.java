@@ -54,6 +54,7 @@ import javax.annotation.Nullable;
 public final class LinkCommandLine extends CommandLine {
   private final String actionName;
   private final String toolPath;
+  private final boolean codeCoverageEnabled;
   private final CppConfiguration cppConfiguration;
   private final ActionOwner owner;
   private final CcToolchainFeatures.Variables variables;
@@ -101,6 +102,7 @@ public final class LinkCommandLine extends CommandLine {
 
     this.actionName = actionName;
     this.toolPath = toolPath;
+    this.codeCoverageEnabled = configuration.isCodeCoverageEnabled();
     this.cppConfiguration = configuration.getFragment(CppConfiguration.class);
     this.variables = variables;
     this.featureConfiguration = featureConfiguration;
@@ -395,18 +397,6 @@ public final class LinkCommandLine extends CommandLine {
                     .build()));
         break;
 
-      case DYNAMIC_LIBRARY:
-        argv.add(toolPath);
-        argv.addAll(
-            featureConfiguration.getCommandLine(
-                actionName,
-                new Variables.Builder()
-                    .addAll(variables)
-                    .addStringSequenceVariable(
-                        CppLinkActionBuilder.LEGACY_LINK_FLAGS_VARIABLE, getToolchainFlags())
-                    .build()));
-        break;
-
       case STATIC_LIBRARY:
       case PIC_STATIC_LIBRARY:
       case ALWAYS_LINK_STATIC_LIBRARY:
@@ -419,14 +409,23 @@ public final class LinkCommandLine extends CommandLine {
         argv.addAll(featureConfiguration.getCommandLine(actionName, variables));
         break;
 
-        // Since the objc case is not hardcoded in CppConfiguration, we can use the actual tool.
-        // TODO(b/30109612): make this pattern the case for all link variants.
+      // Since the objc case/dynamic libs is not hardcoded in CppConfiguration, we can use the
+      // actual tool.
+      // TODO(b/30109612): make this pattern the case for all link variants.
+      case DYNAMIC_LIBRARY:
       case OBJC_ARCHIVE:
       case OBJC_FULLY_LINKED_ARCHIVE:
       case OBJC_EXECUTABLE:
       case OBJCPP_EXECUTABLE:
         argv.add(toolPath);
-        argv.addAll(featureConfiguration.getCommandLine(actionName, variables));
+        argv.addAll(
+            featureConfiguration.getCommandLine(
+                actionName,
+                new Variables.Builder()
+                    .addAll(variables)
+                    .addStringSequenceVariable(
+                        CppLinkActionBuilder.LEGACY_LINK_FLAGS_VARIABLE, getToolchainFlags())
+                    .build()));
         break;
 
       default:
@@ -572,6 +571,7 @@ public final class LinkCommandLine extends CommandLine {
       }
 
       optionList.add("-DGPLATFORM=\"" + cppConfiguration + "\"");
+      optionList.add("-DBUILD_COVERAGE_ENABLED=" + (codeCoverageEnabled ? "1" : "0"));
 
       // Needed to find headers included from linkstamps.
       optionList.add("-I.");

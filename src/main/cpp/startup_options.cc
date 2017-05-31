@@ -14,7 +14,6 @@
 #include "src/main/cpp/startup_options.h"
 
 #include <assert.h>
-#include <errno.h>  // errno, ENOENT
 
 #include <cstdio>
 #include <cstdlib>
@@ -57,8 +56,7 @@ StartupOptions::StartupOptions(const string &product_name,
       invocation_policy(NULL),
       client_debug(false),
       use_custom_exit_code_on_abrupt_exit(true),
-      java_logging_formatter("java.util.logging.SimpleFormatter"),
-      use_action_cache(true) {
+      java_logging_formatter("java.util.logging.SimpleFormatter") {
   bool testing = !blaze::GetEnv("TEST_TMPDIR").empty();
   if (testing) {
     output_root = MakeAbsolute(blaze::GetEnv("TEST_TMPDIR"));
@@ -84,8 +82,7 @@ StartupOptions::StartupOptions(const string &product_name,
                      "write_command_log",
                      "watchfs",
                      "client_debug",
-                     "use_custom_exit_code_on_abrupt_exit",
-                     "use_action_cache"};
+                     "use_custom_exit_code_on_abrupt_exit"};
   unary_options = {"output_base", "install_base",
       "output_user_root", "host_jvm_profile", "host_javabase",
       "host_jvm_args", "bazelrc", "blazerc", "io_nice_level",
@@ -285,12 +282,6 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
   } else if (GetNullaryOption(arg, "--nouse_custom_exit_code_on_abrupt_exit")) {
     use_custom_exit_code_on_abrupt_exit = false;
     option_sources["use_custom_exit_code_on_abrupt_exit"] = rcfile;
-  } else if (GetNullaryOption(arg, "--nouse_action_cache")) {
-    use_action_cache = false;
-    option_sources["use_action_cache"] = rcfile;
-  } else if (GetNullaryOption(arg, "--use_action_cache")) {
-    use_action_cache = true;
-    option_sources["use_action_cache"] = rcfile;
   } else if ((value = GetUnaryOption(
       arg, next_arg, "--connect_timeout_secs")) != NULL) {
     if (!blaze_util::safe_strto32(value, &connect_timeout_secs) ||
@@ -357,8 +348,17 @@ string StartupOptions::GetDefaultHostJavabase() const {
 
 string StartupOptions::GetHostJavabase() {
   if (host_javabase.empty()) {
-    host_javabase = GetDefaultHostJavabase();
+    if (default_host_javabase.empty()) {
+      default_host_javabase = GetDefaultHostJavabase();
+    }
+
+    return default_host_javabase;
+  } else {
+    return host_javabase;
   }
+}
+
+string StartupOptions::GetExplicitHostJavabase() const {
   return host_javabase;
 }
 
@@ -399,8 +399,8 @@ void StartupOptions::AddJVMArgumentSuffix(const string &real_install_dir,
                                           const string &jar_path,
     std::vector<string> *result) const {
   result->push_back("-jar");
-  result->push_back(blaze::ConvertPath(
-      blaze_util::JoinPath(real_install_dir, jar_path)));
+  result->push_back(
+      blaze::PathAsJvmFlag(blaze_util::JoinPath(real_install_dir, jar_path)));
 }
 
 blaze_exit_code::ExitCode StartupOptions::AddJVMArguments(
@@ -409,16 +409,18 @@ blaze_exit_code::ExitCode StartupOptions::AddJVMArguments(
   // Configure logging
   const string propFile =
       blaze_util::JoinPath(output_base, "javalog.properties");
+  string java_log(
+      blaze::PathAsJvmFlag(blaze_util::JoinPath(output_base, "java.log")));
   if (!blaze_util::WriteFile("handlers=java.util.logging.FileHandler\n"
                              ".level=INFO\n"
                              "java.util.logging.FileHandler.level=INFO\n"
                              "java.util.logging.FileHandler.pattern=" +
-                                 blaze_util::JoinPath(output_base, "java.log") +
+                                 java_log +
                                  "\n"
-                                 "java.util.logging.FileHandler.limit=50000\n"
+                                 "java.util.logging.FileHandler.limit=1024000\n"
                                  "java.util.logging.FileHandler.count=1\n"
-                                 "java.util.logging.FileHandler.formatter="
-                                 + java_logging_formatter + "\n",
+                                 "java.util.logging.FileHandler.formatter=" +
+                                 java_logging_formatter + "\n",
                              propFile)) {
     perror(("Couldn't write logging file " + propFile).c_str());
   } else {

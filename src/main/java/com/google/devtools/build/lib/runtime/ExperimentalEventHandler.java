@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.buildtool.buildevent.TestFilteringCompleteE
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
+import com.google.devtools.build.lib.events.ExtendedEventHandler.FetchProgress;
 import com.google.devtools.build.lib.pkgcache.LoadingPhaseCompleteEvent;
 import com.google.devtools.build.lib.skyframe.LoadingPhaseStartedEvent;
 import com.google.devtools.build.lib.util.Clock;
@@ -342,6 +343,12 @@ public class ExperimentalEventHandler implements EventHandler {
       buildComplete = true;
     }
     stopUpdateThread();
+  }
+
+  @Subscribe
+  public void downloadProgress(FetchProgress event) {
+    stateTracker.downloadProgress(event);
+    refresh();
   }
 
   @Subscribe

@@ -30,6 +30,7 @@ import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.HEADERS;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.NON_ARC_SRCS_TYPE;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.PRECOMPILED_SRCS_TYPE;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.SRCS_TYPE;
+import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.STRIP;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -38,9 +39,11 @@ import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
+import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
@@ -51,8 +54,10 @@ import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
+import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -222,7 +227,18 @@ public abstract class CompilationSupport {
   static final ImmutableList<String> DEFAULT_COMPILER_FLAGS = ImmutableList.of("-DOS_IOS");
 
   static final ImmutableList<String> DEFAULT_LINKER_FLAGS = ImmutableList.of("-ObjC");
- 
+
+  /**
+   * Set of {@link com.google.devtools.build.lib.util.FileType} of source artifacts that are
+   * compatible with header thinning.
+   */
+  protected static final FileTypeSet SOURCES_FOR_HEADER_THINNING =
+      FileTypeSet.of(
+          CppFileTypes.OBJC_SOURCE,
+          CppFileTypes.OBJCPP_SOURCE,
+          CppFileTypes.CPP_SOURCE,
+          CppFileTypes.C_SOURCE);
+
   /**
    * Returns information about the given rule's compilation artifacts.
    */
@@ -992,6 +1008,51 @@ public abstract class CompilationSupport {
         : intermediateArtifacts.strippedSingleArchitectureBinary();    
   }
 
+  private static CommandLine symbolStripCommandLine(
+      Iterable<String> extraFlags, Artifact unstrippedArtifact, Artifact strippedArtifact) {
+    return CustomCommandLine.builder()
+        .add(STRIP)
+        .add(extraFlags)
+        .addExecPath("-o", strippedArtifact)
+        .addPath(unstrippedArtifact.getExecPath())
+        .build();
+  }
+
+  /** Signals if stripping should include options for dynamic libraries. */
+  protected enum StrippingType {
+    DEFAULT, DYNAMIC_LIB
+  }
+
+  /**
+   * Registers an action that uses the 'strip' tool to perform binary stripping on the given binary
+   * subject to the given {@link StrippingType}.
+   */
+  protected void registerBinaryStripAction(Artifact binaryToLink, StrippingType strippingType) {
+    final Iterable<String> stripArgs;
+    if (TargetUtils.isTestRule(ruleContext.getRule())) {
+      // For test targets, only debug symbols are stripped off, since /usr/bin/strip is not able
+      // to strip off all symbols in XCTest bundle.
+      stripArgs = ImmutableList.of("-S");
+    } else if (strippingType == StrippingType.DYNAMIC_LIB) {
+      // For dynamic libs must pass "-x" to strip only local symbols.
+      stripArgs = ImmutableList.of("-x");
+    } else {
+      stripArgs = ImmutableList.<String>of();
+    }
+
+    Artifact strippedBinary = intermediateArtifacts.strippedSingleArchitectureBinary();
+
+    ruleContext.registerAction(
+        ObjcRuleClasses.spawnAppleEnvActionBuilder(
+                appleConfiguration, appleConfiguration.getSingleArchPlatform())
+            .setMnemonic("ObjcBinarySymbolStrip")
+            .setExecutable(xcrunwrapper(ruleContext))
+            .setCommandLine(symbolStripCommandLine(stripArgs, binaryToLink, strippedBinary))
+            .addOutput(strippedBinary)
+            .addInput(binaryToLink)
+            .build(ruleContext));
+  }
+
   private NestedSet<Artifact> getGcovForObjectiveCIfNeeded() {
     if (ruleContext.getConfiguration().isCodeCoverageEnabled()
         && ruleContext.attributes().has(IosTest.OBJC_GCOV_ATTR, BuildType.LABEL)) {
@@ -1054,6 +1115,28 @@ public abstract class CompilationSupport {
     return parents.build();
   }
 
+  /** Holds information about Objective-C compile actions that require header thinning. */
+  protected static final class ObjcHeaderThinningInfo {
+    /** Source file for compile action. */
+    public final Artifact sourceFile;
+    /** headers_list file for compile action. */
+    public final Artifact headersListFile;
+    /** Command line arguments for compile action execution. */
+    public final ImmutableList<String> arguments;
+
+    public ObjcHeaderThinningInfo(
+        Artifact sourceFile, Artifact headersListFile, ImmutableList<String> arguments) {
+      this.sourceFile = Preconditions.checkNotNull(sourceFile);
+      this.headersListFile = Preconditions.checkNotNull(headersListFile);
+      this.arguments = Preconditions.checkNotNull(arguments);
+    }
+
+    public ObjcHeaderThinningInfo(
+        Artifact sourceFile, Artifact headersListFile, Iterable<String> arguments) {
+      this(sourceFile, headersListFile, ImmutableList.copyOf(arguments));
+    }
+  }
+
   /**
    * Returns true when ObjC header thinning is enabled via configuration and an a valid
    * header_scanner executable target is provided.
@@ -1073,6 +1156,98 @@ public abstract class CompilationSupport {
     return ruleContext
         .getPrerequisite(ObjcRuleClasses.HEADER_SCANNER_ATTRIBUTE, Mode.HOST)
         .getProvider(FilesToRunProvider.class);
+  }
+
+  /**
+   * Creates and registers ObjcHeaderScanning {@link SpawnAction}. Groups all the actions by their
+   * compilation command line arguments and creates a ObjcHeaderScanning action for each unique one.
+   */
+  protected void registerHeaderScanningActions(
+      ImmutableList<ObjcHeaderThinningInfo> headerThinningInfo,
+      ObjcProvider objcProvider,
+      CompilationArtifacts compilationArtifacts) {
+    if (headerThinningInfo.isEmpty()) {
+      return;
+    }
+
+    FilesToRunProvider headerScannerTool = getHeaderThinningToolExecutable();
+    PrerequisiteArtifacts appleSdks =
+        ruleContext.getPrerequisiteArtifacts(ObjcRuleClasses.APPLE_SDK_ATTRIBUTE, Mode.TARGET);
+    ListMultimap<ImmutableList<String>, ObjcHeaderThinningInfo>
+        objcHeaderThinningInfoByCommandLine = groupActionsByCommandLine(headerThinningInfo);
+    // Register a header scanning spawn action for each unique set of command line arguments
+    for (ImmutableList<String> args : objcHeaderThinningInfoByCommandLine.keySet()) {
+      SpawnAction.Builder builder =
+          new SpawnAction.Builder()
+              .setMnemonic("ObjcHeaderScanning")
+              .setExecutable(headerScannerTool)
+              .addInputs(appleSdks.list());
+      CustomCommandLine.Builder cmdLine =
+          CustomCommandLine.builder()
+              .add("--arch")
+              .add(appleConfiguration.getSingleArchitecture().toLowerCase())
+              .add("--platform")
+              .add(appleConfiguration.getSingleArchPlatform().getLowerCaseNameInPlist())
+              .add("--sdk_version")
+              .add(
+                  appleConfiguration
+                      .getSdkVersionForPlatform(appleConfiguration.getSingleArchPlatform())
+                      .toStringWithMinimumComponents(2))
+              .add("--xcode_version")
+              .add(appleConfiguration.getXcodeVersion().toStringWithMinimumComponents(2))
+              .add("--");
+      for (ObjcHeaderThinningInfo info : objcHeaderThinningInfoByCommandLine.get(args)) {
+        cmdLine.addJoinPaths(
+            ":",
+            Lists.newArrayList(info.sourceFile.getExecPath(), info.headersListFile.getExecPath()));
+        builder.addInput(info.sourceFile).addOutput(info.headersListFile);
+      }
+      ruleContext.registerAction(
+          builder
+              .setCommandLine(cmdLine.add("--").add(args).build())
+              .addInputs(compilationArtifacts.getPrivateHdrs())
+              .addTransitiveInputs(attributes.hdrs())
+              .addTransitiveInputs(objcProvider.get(ObjcProvider.HEADER))
+              .addInputs(compilationArtifacts.getPchFile().asSet())
+              .addTransitiveInputs(objcProvider.get(ObjcProvider.STATIC_FRAMEWORK_FILE))
+              .addTransitiveInputs(objcProvider.get(ObjcProvider.DYNAMIC_FRAMEWORK_FILE))
+              .build(ruleContext));
+    }
+  }
+
+  /**
+   * Groups {@link ObjcHeaderThinningInfo} objects based on the command line arguments of the
+   * ObjcCompile action.
+   *
+   * <p>Grouping by command line arguments allows {@link
+   * #registerHeaderScanningActions(ImmutableList, ObjcProvider, CompilationArtifacts)} to create a
+   * {@link SpawnAction} based on the compiler command line flags that may cause a difference in
+   * behaviour by the preprocessor. Some of the command line arguments must be filtered out as they
+   * change with every source {@link Artifact}; for example the object file (-o) and dotd filenames
+   * (-MF). These arguments are known not to change the preprocessor behaviour.
+   *
+   * @param headerThinningInfos information for compile actions that require header thinning
+   * @return values in {@code headerThinningInfos} grouped by compile action command line arguments
+   */
+  private static ListMultimap<ImmutableList<String>, ObjcHeaderThinningInfo>
+      groupActionsByCommandLine(ImmutableList<ObjcHeaderThinningInfo> headerThinningInfos) {
+    // Maintain insertion order so that iteration in #registerHeaderScanningActions is deterministic
+    ListMultimap<ImmutableList<String>, ObjcHeaderThinningInfo>
+        objcHeaderThinningInfoByCommandLine = ArrayListMultimap.create();
+    for (ObjcHeaderThinningInfo info : headerThinningInfos) {
+      ImmutableList.Builder<String> filteredArgumentsBuilder = ImmutableList.builder();
+      List<String> arguments = info.arguments;
+      for (int i = 0; i < arguments.size(); ++i) {
+        String arg = arguments.get(i);
+        if (arg.equals("-MF") || arg.equals("-o") || arg.equals("-c")) {
+          ++i;
+        } else if (!arg.equals("-MD")) {
+          filteredArgumentsBuilder.add(arg);
+        }
+      }
+      objcHeaderThinningInfoByCommandLine.put(filteredArgumentsBuilder.build(), info);
+    }
+    return objcHeaderThinningInfoByCommandLine;
   }
 
   @Nullable

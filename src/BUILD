@@ -9,6 +9,7 @@ filegroup(
         ":darwin": ["//src/main/native:libunix.dylib"],
         ":darwin_x86_64": ["//src/main/native:libunix.dylib"],
         ":windows": ["//src/main/native:windows_jni.dll"],
+        ":windows_msys": ["//src/main/native:windows_jni.dll"],
         ":windows_msvc": ["//src/main/native:windows_jni.dll"],
         "//conditions:default": ["//src/main/native:libunix.so"],
     }),
@@ -104,7 +105,7 @@ filegroup(
         "//src/tools/xcode/ibtoolwrapper:ibtoolwrapper",
         "//src/tools/xcode/libtool:libtool_srcs",
         "//src/tools/xcode/momcwrapper:momcwrapper",
-        "//src/tools/xcode/swiftstdlibtoolwrapper:swiftstdlibtoolwrapper",
+        "//src/tools/xcode/swiftstdlibtoolwrapper:swiftstdlibtoolwrapper_srcs",
         "//src/tools/xcode/environment:environment_plist",
         "//src/tools/xcode/xcrunwrapper:xcrunwrapper",
         "//src/objc_tools/bundlemerge:bundlemerge_deploy.jar",
@@ -140,7 +141,6 @@ genrule(
         "//src/tools/android/java/com/google/devtools/build/android:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/ideinfo:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/idlclass:embedded_tools",
-        "//src/tools/android/java/com/google/devtools/build/android/incrementaldeployment:srcs",
         "//src/tools/android/java/com/google/devtools/build/android/dexer:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/ziputils:embedded_tools",
         "//src/main/protobuf:srcs",
@@ -148,6 +148,7 @@ genrule(
         "//src/java_tools/singlejar:SingleJar_deploy.jar",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass:GenClass_deploy.jar",
         "//src/java_tools/junitrunner/java/com/google/testing/junit/runner:Runner_deploy.jar",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner:ExperimentalRunner_deploy.jar",
         "//src/java_tools/junitrunner/java/com/google/testing/coverage:embedded_tools",
         "//third_party/ijar",
         "//third_party/java/apkbuilder:embedded_tools",
@@ -277,6 +278,12 @@ config_setting(
 config_setting(
     name = "windows_msvc",
     values = {"cpu": "x64_windows_msvc"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "windows_msys",
+    values = {"cpu": "x64_windows_msys"},
     visibility = ["//visibility:public"],
 )
 

@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.buildjar.jarhelper.JarCreator;
+import com.google.devtools.build.buildjar.javac.JavacOptions;
 import com.google.devtools.build.buildjar.proto.JavaCompilation.Manifest;
 import com.google.devtools.build.buildjar.resourcejar.ResourceJarBuilder;
 import com.google.devtools.build.buildjar.resourcejar.ResourceJarOptions;
@@ -166,7 +167,7 @@ public class VanillaJavaBuilder implements Closeable {
               new PrintWriter(output, true),
               fileManager,
               diagnosticCollector,
-              optionsParser.getJavacOpts(),
+              JavacOptions.removeBazelSpecificFlags(optionsParser.getJavacOpts()),
               ImmutableList.<String>of() /*classes*/,
               sources);
       setProcessors(optionsParser, fileManager, task);
@@ -197,11 +198,15 @@ public class VanillaJavaBuilder implements Closeable {
     }
 
     for (Diagnostic<? extends JavaFileObject> diagnostic : diagnosticCollector.getDiagnostics()) {
-      StringBuilder message = new StringBuilder(diagnostic.getSource().getName());
-      if (diagnostic.getLineNumber() != -1) {
-        message.append(':').append(diagnostic.getLineNumber());
+      StringBuilder message = new StringBuilder();
+      if (diagnostic.getSource() != null) {
+        message.append(diagnostic.getSource().getName());
+        if (diagnostic.getLineNumber() != -1) {
+          message.append(':').append(diagnostic.getLineNumber());
+        }
+        message.append(": ");
       }
-      message.append(": ").append(diagnostic.getKind().toString().toLowerCase(ENGLISH));
+      message.append(diagnostic.getKind().toString().toLowerCase(ENGLISH));
       message.append(": ").append(diagnostic.getMessage(ENGLISH)).append(System.lineSeparator());
       output.write(message.toString());
     }

@@ -16,13 +16,36 @@ package com.google.devtools.build.lib.events;
 
 /**
  * Interface for reporting events during the build. It extends the {@link EventHandler} by also
- * allowing posting arbitrary objects on the event bus.
+ * allowing posting more structured information.
  */
 public interface ExtendedEventHandler extends EventHandler {
 
   /** Interface for declaring events that can be posted via the extended event handler */
   public interface Postable {}
 
-  /** Report arbitrary information over the evnt bus. */
+  /** Post an postable object with more refined information about an important build event */
   void post(Postable obj);
+
+  /**
+   * Interface for declaring postable events that report about progress (as oposed to success or
+   * failure) and hence should not be stored and replayed.
+   */
+  public interface ProgressLike extends Postable {}
+
+  /** Interface for progress events that report about fetching from a remote site */
+  public interface FetchProgress extends ProgressLike {
+
+    /**
+     * The resource that was originally requested and uniquely determines the fetch source. The
+     * actual fetching may use mirrors, proxies, or similar. The resource need not be an URL, but it
+     * has to uniquely identify the particular fetch among all fetch events.
+     */
+    String getResourceIdentifier();
+
+    /** Human readable description of the progress */
+    String getProgress();
+
+    /** Wether the fetch progress reported about is finished already */
+    boolean isFinished();
+  }
 }

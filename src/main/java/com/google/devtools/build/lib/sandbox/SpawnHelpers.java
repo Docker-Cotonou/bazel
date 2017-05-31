@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.sandbox;
 
-import com.google.common.collect.Iterables;
 import com.google.common.io.Files;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -22,7 +21,6 @@ import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.analysis.AnalysisUtils;
-import com.google.devtools.build.lib.rules.cpp.CppCompileAction;
 import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -127,7 +125,7 @@ public final class SpawnHelpers {
       Path source;
       switch (fields.length) {
         case 1:
-          source = fs.getPath("/dev/null");
+          source = null;
           break;
         case 2:
           source = fs.getPath(fields[1]);
@@ -152,12 +150,12 @@ public final class SpawnHelpers {
       }
       for (Map.Entry<PathFragment, Artifact> mapping : rootAndMappings.getValue().entrySet()) {
         Artifact sourceArtifact = mapping.getValue();
-        PathFragment source =
-            (sourceArtifact != null) ? sourceArtifact.getExecPath() : new PathFragment("/dev/null");
+        Path source =
+            (sourceArtifact != null) ? execRoot.getRelative(sourceArtifact.getExecPath()) : null;
 
         Preconditions.checkArgument(!mapping.getKey().isAbsolute());
         PathFragment target = root.getRelative(mapping.getKey());
-        mounts.put(target, execRoot.getRelative(source));
+        mounts.put(target, source);
       }
     }
   }
@@ -168,13 +166,6 @@ public final class SpawnHelpers {
     List<ActionInput> inputs =
         ActionInputHelper.expandArtifacts(
             spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
-
-    if (spawn.getResourceOwner() instanceof CppCompileAction) {
-      CppCompileAction action = (CppCompileAction) spawn.getResourceOwner();
-      if (action.shouldScanIncludes()) {
-        Iterables.addAll(inputs, action.getAdditionalInputs());
-      }
-    }
 
     // ActionInputHelper#expandArtifacts above expands empty TreeArtifacts into an empty list.
     // However, actions that accept TreeArtifacts as inputs generally expect that the empty

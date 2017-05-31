@@ -199,6 +199,11 @@ def _is_gold_supported(repository_ctx, cc):
       "-fuse-ld=gold",
       "-o",
       "/dev/null",
+      # Some macos clang versions don't fail when setting -fuse-ld=gold, adding
+      # these lines to force it to. This also means that we will not detect
+      # gold when only a very old (year 2010 and older) is present.
+      "-Wl,--start-lib",
+      "-Wl,--end-lib",
       str(repository_ctx.path("tools/cpp/empty.cc"))
   ])
   return result.return_code == 0
@@ -296,7 +301,7 @@ def _crosstool_content(repository_ctx, cc, cpu_value, darwin):
   }
 
 # TODO(pcloudy): Remove this after MSVC CROSSTOOL becomes default on Windows
-def _get_windows_crosstool_content(repository_ctx):
+def _get_windows_msys_crosstool_content(repository_ctx):
   """Return the content of msys crosstool which is still the default CROSSTOOL on Windows."""
   bazel_sh = _get_env_var(repository_ctx, "BAZEL_SH").replace("\\", "/").lower()
   tokens = bazel_sh.rsplit("/", 1)
@@ -322,7 +327,7 @@ def _get_windows_crosstool_content(repository_ctx):
       '   host_system_name: "local"\n' +
       "   needsPic: false\n" +
       '   target_libc: "local"\n' +
-      '   target_cpu: "x64_windows"\n' +
+      '   target_cpu: "x64_windows_msys"\n' +
       '   target_system_name: "local"\n' +
       '   tool_path { name: "ar" path: "%susr/bin/ar" }\n' % msys_root +
       '   tool_path { name: "compat-ld" path: "%susr/bin/ld" }\n' % msys_root +
@@ -617,6 +622,45 @@ def _get_env(repository_ctx):
   else:
     return ""
 
+def _coverage_feature(darwin):
+  if darwin:
+    compile_flags = """flag_group {
+        flag: '-fprofile-instr-generate'
+        flag: '-fcoverage-mapping'
+      }"""
+    link_flags = """flag_group {
+        flag: '-fprofile-instr-generate'
+      }"""
+  else:
+    compile_flags = """flag_group {
+        flag: '-fprofile-arcs'
+        flag: '-ftest-coverage'
+      }"""
+    link_flags = """flag_group {
+        flag: '-lgcov'
+      }"""
+  return """
+    feature {
+      name: 'coverage'
+      provides: 'profile'
+      flag_set {
+        action: 'preprocess-assemble'
+        action: 'c-compile'
+        action: 'c++-compile'
+        action: 'c++-header-parsing'
+        action: 'c++-header-preprocessing'
+        action: 'c++-module-compile'
+        """ + compile_flags + """
+      }
+      flag_set {
+        action: 'c++-link-interface-dynamic-library'
+        action: 'c++-link-dynamic-library'
+        action: 'c++-link-executable'
+        """ + link_flags + """
+      }
+    }
+  """
+
 def _impl(repository_ctx):
   repository_ctx.file("tools/cpp/empty.cc", "int main() {}")
   cpu_value = _get_cpu_value(repository_ctx)
@@ -674,10 +718,13 @@ def _impl(repository_ctx):
         cxx_include_directories.append(("cxx_builtin_include_directory: \"%s\"" % path))
     _tpl(repository_ctx, "CROSSTOOL", {
         "%{cpu}": cpu_value,
-        "%{content}": _get_windows_crosstool_content(repository_ctx),
+        "%{default_toolchain_name}": "msvc_x64",
+        "%{toolchain_name}": "msys_x64",
+        "%{content}": _get_windows_msys_crosstool_content(repository_ctx),
         "%{opt_content}": "",
         "%{dbg_content}": "",
         "%{cxx_builtin_include_directory}": "\n".join(cxx_include_directories),
+        "%{coverage}": "",
     })
   else:
     darwin = cpu_value == "darwin"
@@ -698,11 +745,14 @@ def _impl(repository_ctx):
         "cc_wrapper.sh")
     _tpl(repository_ctx, "CROSSTOOL", {
         "%{cpu}": cpu_value,
+        "%{default_toolchain_name}": "local",
+        "%{toolchain_name}": "local",
         "%{content}": _build_crosstool(crosstool_content) + "\n" +
                       _build_tool_path(tool_paths),
         "%{opt_content}": _build_crosstool(opt_content, "    "),
         "%{dbg_content}": _build_crosstool(dbg_content, "    "),
         "%{cxx_builtin_include_directory}": "",
+        "%{coverage}": _coverage_feature(darwin),
     })
 
 

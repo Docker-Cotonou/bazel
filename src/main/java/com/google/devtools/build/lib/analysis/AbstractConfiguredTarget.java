@@ -23,8 +23,8 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.packages.ClassObjectConstructor;
 import com.google.devtools.build.lib.packages.PackageSpecification;
-import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.syntax.ClassObject;
@@ -117,8 +117,6 @@ public abstract class AbstractConfiguredTarget
         // accessible in Skylark.
         return SkylarkNestedSet.of(
             Artifact.class, getProvider(FileProvider.class).getFilesToBuild());
-      case ASPECTS_FIELD:
-        return ImmutableList.<String>of();
       case DEFAULT_RUNFILES_FIELD:
         return RunfilesProvider.DEFAULT_RUNFILES.apply(this);
       case DATA_RUNFILES_FIELD:
@@ -130,12 +128,12 @@ public abstract class AbstractConfiguredTarget
 
   @Override
   public Object getIndex(Object key, Location loc) throws EvalException {
-    if (!(key instanceof SkylarkClassObjectConstructor)) {
+    if (!(key instanceof ClassObjectConstructor)) {
       throw new EvalException(loc, String.format(
           "Type Target only supports indexing by object constructors, got %s instead",
           EvalUtils.getDataTypeName(key)));
     }
-    SkylarkClassObjectConstructor constructor = (SkylarkClassObjectConstructor) key;
+    ClassObjectConstructor constructor = (ClassObjectConstructor) key;
     SkylarkProviders provider = getProvider(SkylarkProviders.class);
     if (provider != null) {
       Object declaredProvider = provider.getDeclaredProvider(constructor.getKey());
@@ -146,17 +144,17 @@ public abstract class AbstractConfiguredTarget
     // Either provider or declaredProvider is null
     throw new EvalException(loc, String.format(
         "Object of type Target doesn't contain declared provider %s",
-        constructor.getKey().getExportedName()));
+        constructor.getPrintableName()));
   }
 
   @Override
   public boolean containsKey(Object key, Location loc) throws EvalException {
-    if (!(key instanceof SkylarkClassObjectConstructor)) {
+    if (!(key instanceof ClassObjectConstructor)) {
       throw new EvalException(loc, String.format(
           "Type Target only supports querying by object constructors, got %s instead",
           EvalUtils.getDataTypeName(key)));
     }
-    SkylarkClassObjectConstructor constructor = (SkylarkClassObjectConstructor) key;
+    ClassObjectConstructor constructor = (ClassObjectConstructor) key;
     SkylarkProviders provider = getProvider(SkylarkProviders.class);
     if (provider != null) {
       Object declaredProvider = provider.getDeclaredProvider(constructor.getKey());
@@ -175,6 +173,6 @@ public abstract class AbstractConfiguredTarget
   @Override
   public ImmutableCollection<String> getKeys() {
     return ImmutableList.of(
-        DATA_RUNFILES_FIELD, DEFAULT_RUNFILES_FIELD, LABEL_FIELD, FILES_FIELD, ASPECTS_FIELD);
+        DATA_RUNFILES_FIELD, DEFAULT_RUNFILES_FIELD, LABEL_FIELD, FILES_FIELD);
   }
 }

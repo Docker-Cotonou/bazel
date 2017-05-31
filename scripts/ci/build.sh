@@ -147,7 +147,9 @@ function bazel_build() {
       cp bazel-bin/scripts/packages/debian/bazel-debian.deb $1/bazel_${release_label}.deb
       cp -f bazel-genfiles/scripts/packages/debian/bazel.dsc $1/bazel.dsc
       cp -f bazel-genfiles/scripts/packages/debian/bazel.tar.gz $1/bazel.tar.gz
-      cp bazel-genfiles/bazel-distfile.zip $1/bazel-${release_label}-dist.zip
+      if [ "${JAVA_VERSION}" = "1.8" ]; then
+        cp bazel-genfiles/bazel-distfile.zip $1/bazel-${release_label}-dist.zip
+      fi
     fi
     cp bazel-genfiles/site/jekyll-tree.tar $1/www.bazel.build.tar
     cp bazel-bin/src/tools/benchmark/webapp/site.tar $1/perf.bazel.build.tar.nobuild
@@ -422,12 +424,19 @@ function deploy_release() {
   local github_args=()
   # Filters out README.md for github releases
   for i in "$@"; do
-    if ! ( [[ "$i" =~ README.md$ ]] || [[ "$i" =~ bazel.dsc ]] || [[ "$i" =~ bazel.tar.gz ]] ) ; then
+    if ! ( [[ "$i" =~ README.md$ ]] || [[ "$i" =~ bazel.dsc ]] || [[ "$i" =~ bazel.tar.gz ]] || [[ "$i" =~ .nobuild$ ]] ) ; then
       github_args+=("$i")
     fi
   done
+  local gcs_args=()
+  # Filters out perf.bazel.*.nobuild
+  for i in "$@"; do
+    if ! [[ "$i" =~ .nobuild$ ]] ; then
+      gcs_args+=("$i")
+    fi
+  done
   release_to_github "${github_args[@]}"
-  release_to_gcs "$@"
+  release_to_gcs "${gcs_args[@]}"
   release_to_apt
 }
 

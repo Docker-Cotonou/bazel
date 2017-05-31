@@ -15,15 +15,15 @@
 package com.google.devtools.build.lib.rules.apple;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.packages.ClassObjectConstructor;
+import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
 import com.google.devtools.build.lib.packages.SkylarkClassObject;
-import com.google.devtools.build.lib.packages.SkylarkClassObjectConstructor;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.util.Preconditions;
 import java.util.HashMap;
 import java.util.Locale;
-import java.util.Set;
 import javax.annotation.Nullable;
 
 /** An enum that can be used to distinguish between various apple platforms. */
@@ -42,19 +42,19 @@ public enum Platform {
   WATCHOS_DEVICE("watchos_device", "WatchOS", PlatformType.WATCHOS, true),
   WATCHOS_SIMULATOR("watchos_simulator", "WatchSimulator", PlatformType.WATCHOS, false);
 
-  private static final Set<String> IOS_SIMULATOR_TARGET_CPUS =
+  private static final ImmutableSet<String> IOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("ios_x86_64", "ios_i386");
-  private static final Set<String> IOS_DEVICE_TARGET_CPUS =
+  private static final ImmutableSet<String> IOS_DEVICE_TARGET_CPUS =
           ImmutableSet.of("ios_armv6", "ios_arm64", "ios_armv7", "ios_armv7s");
-  private static final Set<String> WATCHOS_SIMULATOR_TARGET_CPUS =
+  private static final ImmutableSet<String> WATCHOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("watchos_i386");
-  private static final Set<String> WATCHOS_DEVICE_TARGET_CPUS =
+  private static final ImmutableSet<String> WATCHOS_DEVICE_TARGET_CPUS =
       ImmutableSet.of("watchos_armv7k");
-  private static final Set<String> TVOS_SIMULATOR_TARGET_CPUS =
+  private static final ImmutableSet<String> TVOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("tvos_x86_64");
-  private static final Set<String> TVOS_DEVICE_TARGET_CPUS =
+  private static final ImmutableSet<String> TVOS_DEVICE_TARGET_CPUS =
       ImmutableSet.of("tvos_arm64");
-  private static final Set<String> MACOS_TARGET_CPUS =
+  private static final ImmutableSet<String> MACOS_TARGET_CPUS =
       ImmutableSet.of("darwin_x86_64");
 
   private final String skylarkKey;
@@ -133,19 +133,30 @@ public enum Platform {
   }
 
   /**
+   * Returns the platform cpu string for the given target cpu and platform type.
+   *
+   * @param platformType platform type that the given cpu value is implied for
+   * @param arch architecture representation, such as 'arm64'
+   * @throws IllegalArgumentException if there is no valid apple platform for the given target cpu
+   */
+  public static String cpuStringForTarget(PlatformType platformType, String arch) {
+    switch (platformType) {
+      case MACOS:
+        return String.format("darwin_%s", arch);
+      default:
+        return String.format("%s_%s", platformType.toString(), arch);
+    }
+  }
+
+  /**
    * Returns the platform for the given target cpu and platform type.
-   * 
+   *
    * @param platformType platform type that the given cpu value is implied for
    * @param arch architecture representation, such as 'arm64'
    * @throws IllegalArgumentException if there is no valid apple platform for the given target cpu
    */
   public static Platform forTarget(PlatformType platformType, String arch) {
-    switch (platformType) {
-      case MACOS:
-        return forTargetCpu(String.format("darwin_%s", arch));
-      default:
-        return forTargetCpu(String.format("%s_%s", platformType.toString(), arch));
-    }
+    return forTargetCpu(cpuStringForTarget(platformType, arch));
   }
 
  /**
@@ -163,7 +174,7 @@ public enum Platform {
           "No supported apple platform registered for target cpu " + targetCpu);
     }
   }
-  
+
   /**
    * Returns true if the given target cpu is an apple platform.
    */
@@ -173,8 +184,7 @@ public enum Platform {
 
   /** Returns a Skylark struct that contains the instances of this enum. */
   public static SkylarkClassObject getSkylarkStruct() {
-    SkylarkClassObjectConstructor constructor =
-        SkylarkClassObjectConstructor.createNative("platforms");
+    ClassObjectConstructor constructor = new NativeClassObjectConstructor("platforms") { };
     HashMap<String, Object> fields = new HashMap<>();
     for (Platform type : values()) {
       fields.put(type.skylarkKey, type);
@@ -229,8 +239,7 @@ public enum Platform {
 
     /** Returns a Skylark struct that contains the instances of this enum. */
     public static SkylarkClassObject getSkylarkStruct() {
-      SkylarkClassObjectConstructor constructor =
-          SkylarkClassObjectConstructor.createNative("platform_types");
+      ClassObjectConstructor constructor = new NativeClassObjectConstructor("platform_types") { };
       HashMap<String, Object> fields = new HashMap<>();
       for (PlatformType type : values()) {
         fields.put(type.skylarkKey, type);

@@ -195,6 +195,10 @@ class StartupOptions {
   // the --host_javabase option.
   std::string GetHostJavabase();
 
+  // Returns the explicit value of the --host_javabase startup option or the
+  // empty string if it was not specified on the command line.
+  std::string GetExplicitHostJavabase() const;
+
   // Port for gRPC command server. 0 means let the kernel choose, -1 means no
   // gRPC command server.
   int command_port;
@@ -215,9 +219,6 @@ class StartupOptions {
   // Value of the java.util.logging.FileHandler.formatter Java property.
   std::string java_logging_formatter;
 
-  // Whether to use the action cache.
-  bool use_action_cache;
-
  protected:
   // Constructor for subclasses only so that site-specific extensions of this
   // class can override the product name.  The product_name must be the
@@ -233,6 +234,7 @@ class StartupOptions {
 
  private:
   std::string host_javabase;
+  std::string default_host_javabase;
 };
 
 }  // namespace blaze

@@ -13,7 +13,8 @@ machine to develop Bazel and, when you've made a patch, how to submit it.</p>
 In general, we prefer contributions that fix bugs or add features (as opposed to
 stylistic, refactoring, or "cleanup" changes). Please check with us on the
 [dev list](https://groups.google.com/forum/#!forum/bazel-dev) before investing
-a lot of time in a patch.
+a lot of time in a patch. Meet other Bazel contributors on [IRC](http://webchat.freenode.net)
+(irc.freenode.net#bazel).
 
 ### Patch Acceptance Process
 
@@ -62,6 +63,7 @@ for Java. We don't have IDE support for other languages in Bazel right now.
 ### Preparations
 
 * [Install Bazel](https://bazel.build/versions/master/docs/install.html) on your system.
+  Note that for developing Bazel, you need the latest released version of Bazel.
 * Clone Bazel's Git repository from Gerrit:
   * `git clone https://bazel.googlesource.com/bazel`
 * Try to build Bazel:
@@ -103,8 +105,8 @@ To work with Eclipse:
 ### Compiling Bazel
 
 To test out bazel, you need to compile it. To compile a development version of
-Bazel, you need a working version of Bazel already, e.g., the latest release
-version [compiled from source](/versions/master/docs/install.html#compiling-from-source).
+Bazel, you need a the latest released version of bazel, which can be
+[compiled from source](/versions/master/docs/install.html#compiling-from-source).
 
 `bazel build //src:bazel` builds the Bazel binary using `bazel` from your PATH
 and the resulting binary can be found at `bazel-bin/src/bazel`. This is the

@@ -34,7 +34,8 @@ for i in $*; do
   # tools/objc to avoid conflict.
   if  [ "$i" = "tools/objc/xcrunwrapper.sh" ] \
     || [ "$i" = "tools/objc/libtool.sh" ] \
-    || [ "$i" = "tools/objc/make_hashed_objlist.py" ]
+    || [ "$i" = "tools/objc/make_hashed_objlist.py" ] \
+    || [ "$i" = "tools/objc/swift_stdlib_tool.py" ]
   then
     continue
   fi
@@ -48,6 +49,7 @@ for i in $*; do
     *javac7.jar) OUTPUT_PATH=third_party/java/jdk/langtools/javac7.jar ;;
     *SingleJar_deploy.jar) OUTPUT_PATH=tools/jdk/SingleJar_deploy.jar ;;
     *GenClass_deploy.jar) OUTPUT_PATH=tools/jdk/GenClass_deploy.jar ;;
+    *ExperimentalRunner_deploy.jar) OUTPUT_PATH=tools/jdk/ExperimentalTestRunner_deploy.jar ;;
     *Runner_deploy.jar) OUTPUT_PATH=tools/jdk/TestRunner_deploy.jar ;;
     *ijar.exe) OUTPUT_PATH=tools/jdk/ijar/ijar.exe ;;
     *ijar) OUTPUT_PATH=tools/jdk/ijar/ijar ;;
@@ -56,6 +58,7 @@ for i in $*; do
     *src/objc_tools/*) OUTPUT_PATH=tools/objc/precomp_${i##*/} ;;
     *xcode*StdRedirect.dylib) OUTPUT_PATH=tools/objc/StdRedirect.dylib ;;
     *xcode*make_hashed_objlist.py) OUTPUT_PATH=tools/objc/make_hashed_objlist.py ;;
+    *xcode*swift_stdlib_tool.py) OUTPUT_PATH=tools/objc/swift_stdlib_tool.py ;;
     *xcode*realpath) OUTPUT_PATH=tools/objc/realpath ;;
     *xcode*xcode-locator) OUTPUT_PATH=tools/objc/xcode-locator ;;
     *src/tools/xcode/*.sh) OUTPUT_PATH=tools/objc/${i##*/} ;;

@@ -44,7 +44,7 @@ public class ResourceShrinkerActionBuilder {
 
   private List<String> uncompressedExtensions = Collections.emptyList();
   private List<String> assetsToIgnore = Collections.emptyList();
-  private List<String> resourceConfigs = Collections.emptyList();
+  private ResourceConfigurationFilter resourceConfigs;
 
   /**
    * @param ruleContext The RuleContext of the owning rule.
@@ -53,6 +53,7 @@ public class ResourceShrinkerActionBuilder {
     this.ruleContext = ruleContext;
     this.spawnActionBuilder = new SpawnAction.Builder();
     this.sdk = AndroidSdkProvider.fromRuleContext(ruleContext);
+    this.resourceConfigs = ResourceConfigurationFilter.empty(ruleContext);
   }
 
   public ResourceShrinkerActionBuilder setUncompressedExtensions(
@@ -66,7 +67,11 @@ public class ResourceShrinkerActionBuilder {
     return this;
   }
 
-  public ResourceShrinkerActionBuilder setConfigurationFilters(List<String> resourceConfigs) {
+  /**
+   * @param resourceConfigs The configuration filters to apply to the resources.
+   */
+  public ResourceShrinkerActionBuilder setConfigurationFilters(
+      ResourceConfigurationFilter resourceConfigs) {
     this.resourceConfigs = resourceConfigs;
     return this;
   }
@@ -172,12 +177,15 @@ public class ResourceShrinkerActionBuilder {
       commandLine.add("--debug");
     }
     if (!resourceConfigs.isEmpty()) {
-      commandLine.addJoinStrings("--resourceConfigs", ",", resourceConfigs);
+      commandLine.add("--resourceConfigs").add(resourceConfigs.getFilterString());
     }
 
     checkNotNull(resourceFilesZip);
     checkNotNull(shrunkJar);
+    checkNotNull(proguardMapping);
     checkNotNull(primaryResources);
+    checkNotNull(primaryResources.getRTxt());
+    checkNotNull(primaryResources.getManifest());
     checkNotNull(resourceApkOut);
 
     commandLine.addExecPath("--resources", resourceFilesZip);
@@ -186,10 +194,8 @@ public class ResourceShrinkerActionBuilder {
     commandLine.addExecPath("--shrunkJar", shrunkJar);
     inputs.add(shrunkJar);
 
-    if (proguardMapping != null) {
-      commandLine.addExecPath("--proguardMapping", proguardMapping);
-      inputs.add(proguardMapping);
-    }
+    commandLine.addExecPath("--proguardMapping", proguardMapping);
+    inputs.add(proguardMapping);
 
     commandLine.addExecPath("--rTxt", primaryResources.getRTxt());
     inputs.add(primaryResources.getRTxt());
@@ -198,7 +204,10 @@ public class ResourceShrinkerActionBuilder {
     inputs.add(primaryResources.getManifest());
 
     List<Artifact> dependencyManifests = getManifests(dependencyResources);
-    commandLine.addJoinExecPaths("--dependencyManifests", ":", dependencyManifests);
+    commandLine.addJoinExecPaths(
+        "--dependencyManifests",
+        ruleContext.getConfiguration().getHostPathSeparator(),
+        dependencyManifests);
     inputs.addAll(dependencyManifests);
 
     List<String> resourcePackages = getResourcePackages(primaryResources, dependencyResources);

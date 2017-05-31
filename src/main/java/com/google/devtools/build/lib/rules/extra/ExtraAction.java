@@ -18,6 +18,7 @@ import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.AbstractAction;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
@@ -40,7 +41,6 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 
 /**
  * Action used by extra_action rules to create an action that shadows an existing action. Runs a
@@ -51,9 +51,7 @@ public final class ExtraAction extends SpawnAction {
   private final boolean createDummyOutput;
   private final RunfilesSupplier runfilesSupplier;
   private final ImmutableSet<Artifact> extraActionInputs;
-  // This can be read/written from multiple threads, and so accesses should be synchronized.
-  @GuardedBy("this")
-  private boolean inputsKnown;
+  private final Iterable<Artifact> originalShadowedActionInputs;
 
   /**
    * A long way to say (ExtraAction xa) -> xa.getShadowedAction().
@@ -82,7 +80,9 @@ public final class ExtraAction extends SpawnAction {
     super(
         shadowedAction.getOwner(),
         ImmutableList.<Artifact>of(),
-        createInputs(shadowedAction.getInputs(), extraActionInputs, runfilesSupplier),
+        createInputs(
+            shadowedAction.getInputs(), ImmutableList.<Artifact>of(), extraActionInputs,
+            runfilesSupplier),
         outputs,
         AbstractAction.DEFAULT_RESOURCE_SET,
         argv,
@@ -95,12 +95,12 @@ public final class ExtraAction extends SpawnAction {
         mnemonic,
         false,
         null);
+    this.originalShadowedActionInputs = shadowedAction.getInputs();
     this.shadowedAction = shadowedAction;
     this.runfilesSupplier = runfilesSupplier;
     this.createDummyOutput = createDummyOutput;
 
     this.extraActionInputs = extraActionInputs;
-    inputsKnown = shadowedAction.inputsKnown();
     if (createDummyOutput) {
       // Expecting just a single dummy file in the outputs.
       Preconditions.checkArgument(outputs.size() == 1, outputs);
@@ -117,40 +117,38 @@ public final class ExtraAction extends SpawnAction {
   public Iterable<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     Preconditions.checkState(discoversInputs(), this);
+    // We depend on the outputs of actions doing input discovery and they should know their inputs
+    // after having been executed
+    Preconditions.checkState(shadowedAction.inputsDiscovered());
+
     // We need to update our inputs to take account of any additional
     // inputs the shadowed action may need to do its work.
-    if (shadowedAction.discoversInputs() && shadowedAction instanceof AbstractAction) {
-      Iterable<Artifact> additionalInputs =
-          ((AbstractAction) shadowedAction).getInputFilesForExtraAction(actionExecutionContext);
-      updateInputs(createInputs(additionalInputs, extraActionInputs, runfilesSupplier));
-      return ImmutableSet.copyOf(additionalInputs);
-    }
-    return null;
-  }
-
-  @Override
-  public synchronized boolean inputsKnown() {
-    return inputsKnown;
+    Iterable<Artifact> oldInputs = getInputs();
+    updateInputs(createInputs(
+        shadowedAction.getInputs(),
+        shadowedAction.getInputFilesForExtraAction(actionExecutionContext),
+        extraActionInputs,
+        runfilesSupplier));
+    return Sets.<Artifact>difference(
+        ImmutableSet.<Artifact>copyOf(getInputs()), ImmutableSet.<Artifact>copyOf(oldInputs));
   }
 
   private static NestedSet<Artifact> createInputs(
       Iterable<Artifact> shadowedActionInputs,
+      Iterable<Artifact> inputFilesForExtraAction,
       ImmutableSet<Artifact> extraActionInputs,
       RunfilesSupplier extraActionRunfilesSupplier) {
     NestedSetBuilder<Artifact> result = new NestedSetBuilder<>(Order.STABLE_ORDER);
-    if (shadowedActionInputs instanceof NestedSet) {
-      result.addTransitive((NestedSet<Artifact>) shadowedActionInputs);
-    } else {
-      result.addAll(shadowedActionInputs);
+    for (Iterable<Artifact> inputSet : ImmutableList.of(
+        shadowedActionInputs, inputFilesForExtraAction)) {
+      if (inputSet instanceof NestedSet) {
+        result.addTransitive((NestedSet<Artifact>) inputSet);
+      } else {
+        result.addAll(inputSet);
+      }
     }
     result.addAll(extraActionRunfilesSupplier.getArtifacts());
     return result.addAll(extraActionInputs).build();
-  }
-
-  @Override
-  public synchronized void updateInputs(Iterable<Artifact> discoveredInputs) {
-    setInputs(discoveredInputs);
-    inputsKnown = true;
   }
 
   @Override
@@ -184,9 +182,6 @@ public final class ExtraAction extends SpawnAction {
           throw new ActionExecutionException(e.getMessage(), e, this, false);
         }
       }
-    }
-    synchronized (this) {
-      inputsKnown = true;
     }
   }
 

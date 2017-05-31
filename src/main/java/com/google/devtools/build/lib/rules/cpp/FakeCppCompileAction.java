@@ -75,7 +75,6 @@ public class FakeCppCompileAction extends CppCompileAction {
       PathFragment tempOutputFile,
       DotdFile dotdFile,
       ImmutableMap<String, String> localShellEnvironment,
-      boolean codeCoverageEnabled,
       CppConfiguration cppConfiguration,
       CppCompilationContext context,
       Class<? extends CppCompileActionContext> actionContext,
@@ -105,7 +104,6 @@ public class FakeCppCompileAction extends CppCompileAction {
         null,
         null,
         localShellEnvironment,
-        codeCoverageEnabled,
         cppConfiguration,
         // We only allow inclusion of header files explicitly declared in
         // "srcs", so we only use declaredIncludeSrcs, not declaredIncludeDirs.
@@ -268,10 +266,5 @@ public class FakeCppCompileAction extends CppCompileAction {
   @Override
   public ResourceSet estimateResourceConsumptionLocal() {
     return ResourceSet.createWithRamCpuIo(/*memoryMb=*/1, /*cpuUsage=*/0.1, /*ioUsage=*/0.0);
-  }
-
-  @Override
-  public ResourceSet estimateResourceConsumption(Executor executor) {
-    return executor.getContext(actionContext).estimateResourceConsumption(this);
   }
 }

@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "src/main/cpp/util/file.h"
-#include "src/main/cpp/util/file_platform.h"
 #include "src/test/cpp/util/test_util.h"
 #include "gtest/gtest.h"
 
@@ -33,10 +32,13 @@ TEST(FileTest, TestSingleThreadedPipe) {
   std::unique_ptr<IPipe> pipe(CreatePipe());
   char buffer[50] = {0};
   ASSERT_TRUE(pipe.get()->Send("hello", 5));
-  ASSERT_EQ(3, pipe.get()->Receive(buffer, 3));
+  int error = -1;
+  ASSERT_EQ(3, pipe.get()->Receive(buffer, 3, &error));
   ASSERT_TRUE(pipe.get()->Send(" world", 6));
-  ASSERT_EQ(5, pipe.get()->Receive(buffer + 3, 5));
-  ASSERT_EQ(3, pipe.get()->Receive(buffer + 8, 40));
+  ASSERT_EQ(5, pipe.get()->Receive(buffer + 3, 5, &error));
+  ASSERT_EQ(IPipe::SUCCESS, error);
+  ASSERT_EQ(3, pipe.get()->Receive(buffer + 8, 40, &error));
+  ASSERT_EQ(IPipe::SUCCESS, error);
   ASSERT_EQ(0, strncmp(buffer, "hello world", 11));
 }
 
@@ -51,13 +53,17 @@ TEST(FileTest, TestMultiThreadedPipe) {
   // Wait for all data to be fully written to the pipe.
   writer_thread.join();
 
-  ASSERT_EQ(3, pipe.get()->Receive(buffer, 3));
-  ASSERT_EQ(5, pipe.get()->Receive(buffer + 3, 5));
-  ASSERT_EQ(3, pipe.get()->Receive(buffer + 8, 40));
+  int error = -1;
+  ASSERT_EQ(3, pipe.get()->Receive(buffer, 3, &error));
+  ASSERT_EQ(IPipe::SUCCESS, error);
+  ASSERT_EQ(5, pipe.get()->Receive(buffer + 3, 5, &error));
+  ASSERT_EQ(IPipe::SUCCESS, error);
+  ASSERT_EQ(3, pipe.get()->Receive(buffer + 8, 40, &error));
+  ASSERT_EQ(IPipe::SUCCESS, error);
   ASSERT_EQ(0, strncmp(buffer, "hello world", 11));
 }
 
-TEST(FileTest, TestReadFile) {
+TEST(FileTest, TestReadFileIntoString) {
   const char* tempdir = getenv("TEST_TMPDIR");
   ASSERT_NE(nullptr, tempdir);
   ASSERT_NE(0, tempdir[0]);
@@ -77,6 +83,31 @@ TEST(FileTest, TestReadFile) {
 
   ASSERT_TRUE(ReadFile("/dev/null", &actual, 42));
   ASSERT_EQ(std::string(""), actual);
+}
+
+TEST(FileTest, TestReadFileIntoBuffer) {
+  const char* tempdir = getenv("TEST_TMPDIR");
+  EXPECT_NE(nullptr, tempdir);
+  EXPECT_NE(0, tempdir[0]);
+
+  std::string filename(JoinPath(tempdir, "test.readfile"));
+  AutoFileStream fh(fopen(filename.c_str(), "wt"));
+  EXPECT_TRUE(fh.IsOpen());
+  EXPECT_EQ(11, fwrite("hello world", 1, 11, fh));
+  fh.Close();
+
+  char buffer[30];
+  memset(buffer, 0, 30);
+  ASSERT_TRUE(ReadFile(filename, buffer, 5));
+  ASSERT_EQ(string("hello"), string(buffer));
+
+  memset(buffer, 0, 30);
+  ASSERT_TRUE(ReadFile(filename, buffer, 30));
+  ASSERT_EQ(string("hello world"), string(buffer));
+
+  buffer[0] = 'x';
+  ASSERT_TRUE(ReadFile("/dev/null", buffer, 42));
+  ASSERT_EQ('x', buffer[0]);
 }
 
 TEST(FileTest, TestWriteFile) {

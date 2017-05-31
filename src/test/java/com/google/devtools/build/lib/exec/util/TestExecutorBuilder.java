@@ -42,11 +42,11 @@ import java.util.TreeMap;
  * Builder for the test instance of the {@link BlazeExecutor} class.
  */
 public class TestExecutorBuilder {
-  public static final List<Class<? extends OptionsBase>> DEFAULT_OPTIONS = ImmutableList.of(
-      ExecutionOptions.class, CommonCommandOptions.class);
+  public static final ImmutableList<Class<? extends OptionsBase>> DEFAULT_OPTIONS =
+      ImmutableList.of(ExecutionOptions.class, CommonCommandOptions.class);
   private final BlazeDirectories directories;
-  private Reporter reporter = new Reporter();
   private EventBus bus = new EventBus();
+  private Reporter reporter = new Reporter(bus);
   private OptionsParser optionsParser = OptionsParser.newOptionsParser(DEFAULT_OPTIONS);
   private List<ActionContext> strategies = new ArrayList<>();
   private Map<String, SpawnActionContext> spawnStrategyMap =

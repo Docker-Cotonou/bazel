@@ -114,6 +114,9 @@ public class JavaProtoAspect extends NativeAspectClass implements ConfiguredAspe
         checkNotNull(base.getProvider(ProtoSupportDataProvider.class)).getSupportData();
 
     Impl impl = new Impl(ruleContext, supportData, javaSemantics, rpcSupport);
+    if (impl.shouldGenerateCode() && ActionReuser.reuseExistingActions(base, ruleContext, aspect)) {
+      return aspect.build();
+    }
     impl.addProviders(aspect);
     return aspect.build();
   }
@@ -212,7 +215,7 @@ public class JavaProtoAspect extends NativeAspectClass implements ConfiguredAspe
         // TODO(carmi): Expose to native rules
         JavaRuleOutputJarsProvider ruleOutputJarsProvider =
             JavaRuleOutputJarsProvider.builder()
-                .addOutputJar(outputJar, compileTimeJar, sourceJar)
+                .addOutputJar(outputJar, compileTimeJar, ImmutableList.of(sourceJar))
                 .build();
         JavaSourceJarsProvider sourceJarsProvider =
             JavaSourceJarsProvider.create(

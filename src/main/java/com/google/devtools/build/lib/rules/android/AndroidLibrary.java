@@ -46,9 +46,22 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
   protected abstract JavaSemantics createJavaSemantics();
   protected abstract AndroidSemantics createAndroidSemantics();
 
+  /**
+   * Checks expected rule invariants, throws rule errors if anything is set wrong.
+   */
+  private static void validateRuleContext(RuleContext ruleContext)
+      throws InterruptedException, RuleErrorException {
+    if (ruleContext.attributes().isAttributeValueExplicitlySpecified("resources")
+      && DataBinding.isEnabled(ruleContext)) {
+      ruleContext.throwWithRuleError("Data binding doesn't work with the \"resources\" attribute. "
+          + "Use \"resource_files\" instead.");
+    }
+  }
+
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException {
+    validateRuleContext(ruleContext);
     JavaSemantics javaSemantics = createJavaSemantics();
     AndroidSemantics androidSemantics = createAndroidSemantics();
     if (!AndroidSdkProvider.verifyPresence(ruleContext)) {
@@ -84,7 +97,7 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
           ResourceDependencies.fromRuleDeps(ruleContext, JavaCommon.isNeverLink(ruleContext)),
           ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_R_TXT),
           ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_SYMBOLS),
-          ImmutableList.<String>of(), /* configurationFilters */
+          ResourceConfigurationFilter.empty(ruleContext),
           ImmutableList.<String>of(), /* uncompressedExtensions */
           false, /* crunchPng */
           ImmutableList.<String>of(), /* densities */

@@ -20,11 +20,16 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
+import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
+import com.google.devtools.build.lib.actions.ResourceManager;
+import com.google.devtools.build.lib.actions.ResourceManager.ResourceHandle;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.UserExecException;
@@ -155,15 +160,29 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
       AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles)
       throws ExecException, InterruptedException {
     Executor executor = actionExecutionContext.getExecutor();
-
     // Certain actions can't run remotely or in a sandbox - pass them on to the standalone strategy.
     if (!spawn.isRemotable() || spawn.hasNoSandbox()) {
       SandboxHelpers.fallbackToNonSandboxedExecution(spawn, actionExecutionContext, executor);
       return;
     }
 
+    EventBus eventBus = actionExecutionContext.getExecutor().getEventBus();
+    ActionExecutionMetadata owner = spawn.getResourceOwner();
+    eventBus.post(ActionStatusMessage.schedulingStrategy(owner));
+    try (ResourceHandle handle =
+        ResourceManager.instance().acquireResources(owner, spawn.getLocalResources())) {
+      SandboxHelpers.postActionStatusMessage(eventBus, spawn);
+      actuallyExec(spawn, actionExecutionContext, writeOutputFiles);
+    }
+  }
+
+  private void actuallyExec(
+      Spawn spawn,
+      ActionExecutionContext actionExecutionContext,
+      AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles)
+      throws ExecException, InterruptedException {
+    Executor executor = actionExecutionContext.getExecutor();
     SandboxHelpers.reportSubcommand(executor, spawn);
-    SandboxHelpers.postActionStatusMessage(executor, spawn);
 
     PrintWriter errWriter =
         sandboxDebug
@@ -292,12 +311,19 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
     }
   }
 
-  private ImmutableMap<PathFragment, Path> finalizeLinks(Map<PathFragment, Path> unfinalized)
+  private Map<PathFragment, Path> finalizeLinks(Map<PathFragment, Path> unfinalized)
       throws IOException {
-    ImmutableMap.Builder<PathFragment, Path> finalizedLinks = new ImmutableMap.Builder<>();
+    HashMap<PathFragment, Path> finalizedLinks = new HashMap<>();
     for (Map.Entry<PathFragment, Path> mount : unfinalized.entrySet()) {
       PathFragment target = mount.getKey();
       Path source = mount.getValue();
+
+      // If the source is null, the target is supposed to be an empty file. In this case we don't
+      // have to deal with finalizing the link.
+      if (source == null) {
+        finalizedLinks.put(target, source);
+        continue;
+      }
 
       FileStatus stat = source.statNullable(Symlinks.NOFOLLOW);
 
@@ -311,14 +337,11 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
         finalizeLinksPath(finalizedLinks, target, source, stat);
       }
     }
-    return finalizedLinks.build();
+    return finalizedLinks;
   }
 
   private void finalizeLinksPath(
-      ImmutableMap.Builder<PathFragment, Path> finalizedMounts,
-      PathFragment target,
-      Path source,
-      FileStatus stat)
+      Map<PathFragment, Path> finalizedMounts, PathFragment target, Path source, FileStatus stat)
       throws IOException {
     // The source must exist.
     Preconditions.checkArgument(stat != null, "%s does not exist", source.toString());

@@ -44,7 +44,7 @@ public final class Lexer {
 
   // Characters that can come immediately prior to an '=' character to generate
   // a different token
-  private static final Map<Character, TokenKind> EQUAL_TOKENS =
+  private static final ImmutableMap<Character, TokenKind> EQUAL_TOKENS =
       ImmutableMap.<Character, TokenKind>builder()
           .put('=', TokenKind.EQUALS_EQUALS)
           .put('!', TokenKind.NOT_EQUALS)
@@ -837,16 +837,6 @@ public final class Lexer {
     }
 
     addToken(new Token(TokenKind.EOF, pos, pos));
-  }
-
-  /**
-   * Returns the character in the input buffer at the given position.
-   *
-   * @param at the position to get the character at.
-   * @return the character at the given position.
-   */
-  public char charAt(int at) {
-    return buffer[at];
   }
 
   /**

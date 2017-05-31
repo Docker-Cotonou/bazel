@@ -34,6 +34,7 @@ filegroup(
         "//src/main/java/com/google/devtools/build/lib/rules/genquery:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/genrule:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/objc:srcs",
+        "//src/main/java/com/google/devtools/build/lib/rules/platform:srcs",
         "//src/main/java/com/google/devtools/build/lib/sandbox:srcs",
         "//src/main/java/com/google/devtools/build/lib/ssd:srcs",
         "//src/main/java/com/google/devtools/build/lib/standalone:srcs",
@@ -69,13 +70,37 @@ java_library(
     resources = select({
         # todo(dslomov): Get rid of this whole library on Windows.
         "//src:windows": [],
+        "//src:windows_msys": [],
         "//src:windows_msvc": [],
         "//conditions:default": ["//src/main/native:libunix.so"],
     }),
     deps = [
+        ":concurrent",
         ":os_util",
+        ":preconditions",
         ":shell",
+        ":vfs",
         "//third_party:guava",
+    ],
+)
+
+java_library(
+    name = "windows",
+    srcs = glob([
+        "windows/*.java",
+    ]),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base-util",
+        ":clock",
+        ":concurrent",
+        ":os_util",
+        ":preconditions",
+        ":shell",
+        ":vfs",
+        "//src/main/java/com/google/devtools/common/options",
+        "//third_party:guava",
+        "//third_party:jsr305",
     ],
 )
 
@@ -126,7 +151,6 @@ java_library(
     srcs = glob([
         "profiler/*.java",
         "vfs/*.java",
-        "windows/*.java",
     ]),
     visibility = ["//visibility:public"],
     deps = [
@@ -136,7 +160,6 @@ java_library(
         ":os_util",
         ":preconditions",
         ":shell",
-        ":unix",
         "//src/main/java/com/google/devtools/common/options",
         "//third_party:guava",
         "//third_party:jsr305",
@@ -167,6 +190,7 @@ java_library(
     deps = [
         ":clock",
         ":concurrent",
+        ":os_util",
         ":preconditions",
         ":unix",
         ":vfs",
@@ -238,6 +262,17 @@ java_library(
 )
 
 java_library(
+    name = "process_util",
+    srcs = ["util/ProcessUtils.java"],
+    deps = [
+        ":concurrent",
+        ":os_util",
+        ":unix",
+        ":windows",
+    ],
+)
+
+java_library(
     name = "util",
     srcs = glob(
         ["util/*.java"],
@@ -248,6 +283,7 @@ java_library(
             "util/JavaClock.java",
             "util/OS.java",
             "util/Preconditions.java",
+            "util/ProcessUtils.java",
             "util/StringCanonicalizer.java",
             "util/StringTrie.java",
             "util/VarInt.java",
@@ -580,6 +616,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/rules/genquery",
         "//src/main/java/com/google/devtools/build/lib/rules/genrule",
         "//src/main/java/com/google/devtools/build/lib/rules/objc",
+        "//src/main/java/com/google/devtools/build/lib/rules/platform",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:crosstool_config_java_proto",
@@ -678,6 +715,7 @@ java_library(
         ":util",
         "//src/java_tools/singlejar/java/com/google/devtools/build/zip",
         "//src/main/java/com/google/devtools/build/lib:build-base",
+        "//src/main/java/com/google/devtools/build/lib:io",
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
         "//src/main/java/com/google/devtools/build/lib:shell",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
@@ -780,6 +818,9 @@ java_library(
         "rules/java/ProguardLibrary.java",
         "rules/java/ProguardLibraryRule.java",
         "rules/java/ProguardSpecProvider.java",
+        "rules/java/ProtoJavaApiInfoAspectProvider.java",
+        "rules/java/ProtoJavaApiInfoProvider.java",
+        "rules/java/proto/ActionReuser.java",
         "rules/java/proto/JavaCompilationArgsAspectProvider.java",
         "rules/java/proto/JavaLiteProtoAspect.java",
         "rules/java/proto/JavaLiteProtoLibrary.java",
@@ -869,6 +910,8 @@ java_library(
         "rules/java/Jvm.java",
         "rules/java/MessageBundleProvider.java",
         "rules/java/NativeLibraryNestedSetBuilder.java",
+        "rules/java/ProtoJavaApiInfoAspectProvider.java",
+        "rules/java/ProtoJavaApiInfoProvider.java",
         "rules/java/SingleJarActionBuilder.java",
         "rules/java/WriteBuildInfoPropertiesAction.java",
         "rules/java/proto/GeneratedExtensionRegistryProvider.java",
@@ -888,7 +931,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//src/main/java/com/google/devtools/common/options",
-        "//src/main/protobuf:deps_java_proto",
         "//src/main/protobuf:extra_actions_base_java_proto",
         "//third_party:auto_value",
         "//third_party:guava",
@@ -1016,14 +1058,17 @@ java_library(
         ":flags",
         ":io",
         ":packages-internal",
+        ":process_util",
         ":profiler-output",
         ":shared-base-rules",
         ":shell",
         ":unix",
         ":util",
         ":vfs",
+        ":windows",
         "//src/main/java/com/google/devtools/build/docgen:docgen_javalib",
         "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/bazel/repository/downloader",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/transports",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
@@ -1121,9 +1166,11 @@ filegroup(
         "//src/main/java/com/google/devtools/build/lib/rules/apple:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/apple/cpp:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/cpp:srcs",
+        "//src/main/java/com/google/devtools/build/lib/rules/cpp/proto:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/genquery:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/genrule:srcs",
         "//src/main/java/com/google/devtools/build/lib/rules/objc:srcs",
+        "//src/main/java/com/google/devtools/build/lib/rules/platform:srcs",
     ],
 )
 

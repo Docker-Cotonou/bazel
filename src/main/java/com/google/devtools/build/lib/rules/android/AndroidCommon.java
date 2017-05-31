@@ -69,7 +69,6 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
@@ -83,10 +82,8 @@ public class AndroidCommon {
   public static final InstrumentationSpec ANDROID_COLLECTION_SPEC = JavaCommon.JAVA_COLLECTION_SPEC
       .withDependencyAttributes("deps", "data", "exports", "runtime_deps", "binary_under_test");
 
-  public static final Set<String> TRANSITIVE_ATTRIBUTES = ImmutableSet.of(
-      "deps",
-      "exports"
-  );
+  public static final ImmutableSet<String> TRANSITIVE_ATTRIBUTES =
+      ImmutableSet.of("deps", "exports");
 
   public static final <T extends TransitiveInfoProvider> Iterable<T> getTransitivePrerequisites(
       RuleContext ruleContext, Mode mode, final Class<T> classType) {
@@ -593,6 +590,9 @@ public class AndroidCommon {
     if (ruleContext.hasErrors()) {
       return null;
     }
+    if (generatedExtensionRegistryProvider != null) {
+      jarsProducedForRuntime.add(generatedExtensionRegistryProvider.getClassJar());
+    }
     this.jarsProducedForRuntime = jarsProducedForRuntime.add(classJar).build();
     return helper.getAttributes();
   }
@@ -743,13 +743,13 @@ public class AndroidCommon {
     }
     OutputJar resourceJar = null;
     if (resourceClassJar != null && resourceSourceJar != null) {
-      resourceJar = new OutputJar(resourceClassJar, null, resourceSourceJar);
+      resourceJar = new OutputJar(resourceClassJar, null, ImmutableList.of(resourceSourceJar));
       javaRuleOutputJarsProviderBuilder.addOutputJar(resourceJar);
     }
 
     JavaRuleOutputJarsProvider ruleOutputJarsProvider =
         javaRuleOutputJarsProviderBuilder
-            .addOutputJar(classJar, iJar, srcJar)
+            .addOutputJar(classJar, iJar, ImmutableList.of(srcJar))
             .setJdeps(outputDepsProto)
             .build();
     JavaSourceJarsProvider sourceJarsProvider = javaSourceJarsProviderBuilder.build();
@@ -944,7 +944,11 @@ public class AndroidCommon {
 
     ImmutableList<Artifact> srcs =
         ruleContext.getPrerequisiteArtifacts("srcs", RuleConfiguredTarget.Mode.TARGET).list();
-    if (useDataBinding) {
+    if (useDataBinding
+        && LocalResourceContainer.definesAndroidResources(ruleContext.attributes())) {
+      // Add this rule's annotation processor input if this rule has direct resources. If it
+      // doesn't have direct resources, it doesn't produce data binding output so there's no
+      // input for the annotation processor.
       srcs = ImmutableList.<Artifact>builder().addAll(srcs)
           .add(DataBinding.createAnnotationFile(ruleContext, isLibrary)).build();
     }

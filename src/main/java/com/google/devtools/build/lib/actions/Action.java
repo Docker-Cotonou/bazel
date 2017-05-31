@@ -176,19 +176,9 @@ public interface Action extends ActionExecutionMetadata, Describable {
   /**
    * Informs the action that its inputs are {@code inputs}, and that its inputs are now known. Can
    * only be called for actions that discover inputs. After this method is called,
-   * {@link ActionExecutionMetadata#inputsKnown} should return true.
+   * {@link ActionExecutionMetadata#inputsDiscovered} should return true.
    */
   void updateInputs(Iterable<Artifact> inputs);
-
-  /**
-   * Return a best-guess estimate of the operation's resource consumption on the
-   * local host itself for use in scheduling.
-   *
-   * @param executor the application-specific value passed to the
-   *   executor parameter of the top-level call to
-   *   Builder.buildArtifacts().
-   */
-  @Nullable ResourceSet estimateResourceConsumption(Executor executor);
 
   /**
    * Returns true if the output should bypass output filtering. This is used for test actions.
