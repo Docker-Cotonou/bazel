@@ -34,7 +34,7 @@ EOF
   chmod 755 pkg/true.sh
   cat > pkg/slow.sh <<EOF
 #!/bin/sh
-sleep 10
+sleep 3
 exit 0
 EOF
   chmod 755 pkg/slow.sh
@@ -227,7 +227,8 @@ function test_failure_scrollback_buffer_curses {
 }
 
 function test_terminal_title {
-  bazel test --experimental_ui --progress_in_terminal_title pkg:true \
+  bazel test --experimental_ui --curses=yes \
+    --progress_in_terminal_title pkg:true \
     2>$TEST_log || fail "${PRODUCT_NAME} test failed"
   # The terminal title is changed
   expect_log $'\x1b\]0;.*\x07'

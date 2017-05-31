@@ -17,7 +17,7 @@
 # Script for building bazel from scratch without bazel
 
 PROTO_FILES=$(ls src/main/protobuf/*.proto src/main/java/com/google/devtools/build/lib/buildeventstream/proto/*.proto)
-LIBRARY_JARS=$(find third_party -name '*.jar' | grep -Fv /javac-9-dev-r3297-4.jar | grep -Fv /javac7.jar | grep -Fv JavaBuilder | grep -Fv third_party/guava | grep -Fv third_party/guava | grep -ve third_party/grpc/grpc.*jar | tr "\n" " ")
+LIBRARY_JARS=$(find third_party -name '*.jar' | grep -Fv /javac-9-dev-r3297-4.jar | grep -Fv /javac-9-dev-4023-2.jar | grep -Fv /javac7.jar | grep -Fv JavaBuilder | grep -Fv third_party/guava | grep -Fv third_party/guava | grep -ve third_party/grpc/grpc.*jar | tr "\n" " ")
 GRPC_JAVA_VERSION=0.15.0
 GRPC_LIBRARY_JARS=$(find third_party/grpc -name '*.jar' | grep -e .*${GRPC_JAVA_VERSION}.*jar | tr "\n" " ")
 # Guava jars are different for JDK 7 build and JDK 8 build, we select the good
@@ -65,9 +65,15 @@ LDFLAGS=${LDFLAGS:-""}
 
 MSYS_DLLS=""
 
+function get_minor_java_version() {
+  get_java_version
+  java_minor_version=$(echo $JAVA_VERSION | sed -E 's/.+\.(.+)(\..*)?/\1/')
+  javac_minor_version=$(echo $JAVAC_VERSION | sed -E 's/.+\.(.+)(\..*)?/\1/')
+}
+
 # Check that javac -version returns a upper version than $JAVA_VERSION.
-get_java_version
-[ ${JAVA_VERSION#*.} -le ${JAVAC_VERSION#*.} ] || \
+get_minor_java_version
+[ ${java_minor_version} -le ${javac_minor_version} ] || \
   fail "JDK version (${JAVAC_VERSION}) is lower than ${JAVA_VERSION}, please set \$JAVA_HOME."
 
 JAR="${JAVA_HOME}/bin/jar"
@@ -266,8 +272,7 @@ chmod 0755 ${ARCHIVE_DIR}/_embedded_binaries/process-wrapper${EXE_EXT}
 function build_jni() {
   local -r output_dir=$1
 
-  case "${PLATFORM}" in
-  msys*|mingw*)
+  if [ "${PLATFORM}" = "windows" ]; then
     # We need JNI on Windows because some filesystem operations are not (and
     # cannot be) implemented in native Java.
     log "Building Windows JNI library..."
@@ -291,13 +296,10 @@ function build_jni() {
     chmod 0555 "$output"
 
     JNI_FLAGS="-Dio.bazel.EnableJni=1 -Djava.library.path=${output_dir}"
-    ;;
-
-  *)
+  else
     # We don't need JNI on other platforms.
     JNI_FLAGS="-Dio.bazel.EnableJni=0"
-    ;;
-  esac
+  fi
 }
 
 build_jni "${ARCHIVE_DIR}/_embedded_binaries"
@@ -313,12 +315,20 @@ else
   cp tools/osx/xcode_locator_stub.sh ${ARCHIVE_DIR}/_embedded_binaries/xcode-locator
 fi
 
+function get_cwd() {
+  local result=${PWD}
+  [ "$PLATFORM" = "windows" ] && result="$(cygpath -m "$result")"
+  echo "$result"
+}
+
 function run_bazel_jar() {
   local command=$1
   shift
   local client_env=()
-  # Propagate important environment variables to bootstrapped Bazel.
-  for varname in PATH CC BAZEL_SH BAZEL_VC BAZEL_VS BAZEL_PYTHON CPLUS_INCLUDEPATH; do
+  # Propagate all environment variables to bootstrapped Bazel.
+  # See https://stackoverflow.com/41898503/loop-over-environment-variables-in-posix.sh
+  local env_vars="$(awk 'END { for (name in ENVIRON) { if(name != "_") print name; } }' </dev/null)"
+  for varname in $env_vars; do
     eval value=\$$varname
     if [ "${value}" ]; then
       client_env=("${client_env[@]}" --client_env="${varname}=${value}")
@@ -335,7 +345,7 @@ function run_bazel_jar() {
       --install_base=${ARCHIVE_DIR} \
       --output_base=${OUTPUT_DIR}/out \
       --install_md5= \
-      --workspace_directory=${PWD} \
+      --workspace_directory="$(get_cwd)" \
       --nofatal_event_bus_exceptions \
       ${BAZEL_DIR_STARTUP_OPTIONS} \
       ${BAZEL_BOOTSTRAP_STARTUP_OPTIONS:-} \
@@ -344,6 +354,6 @@ function run_bazel_jar() {
       --startup_time=329 --extract_data_time=523 \
       --rc_source=/dev/null --isatty=1 \
       "${client_env[@]}" \
-      --client_cwd=${PWD} \
+      --client_cwd="$(get_cwd)" \
       "${@}"
 }

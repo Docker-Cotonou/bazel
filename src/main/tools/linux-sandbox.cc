@@ -20,19 +20,18 @@
  *  - The working directory (-W) will be made read-write, though.
  *  - Individual files or directories can be made writable (but not deletable)
  *    (-w).
- *  - Individual files or directories can be made inaccessible / unreadable
- *    (-i).
- *  - tmpfs will be mounted on /tmp.
- *  - tmpfs can be mounted on top of existing directories (-e), too.
  *  - If the process takes longer than the timeout (-T), it will be killed with
  *    SIGTERM. If it does not exit within the grace period (-t), it all of its
  *    children will be killed with SIGKILL.
+ *  - tmpfs can be mounted on top of existing directories (-e).
+ *  - If option -R is passed, the process will run as user 'root'.
+ *  - If option -U is passed, the process will run as user 'nobody'.
+ *  - Otherwise, the process runs using the current uid / gid.
  *  - If linux-sandbox itself gets killed, the process and all of its children
  *    will be killed.
  *  - If linux-sandbox's parent dies, it will kill itself, the process and all
  *    the children.
  *  - Network access is allowed, but can be disabled via -N.
- *  - The process runs as user "nobody", unless fakeroot is enabled (-R).
  *  - The hostname and domainname will be set to "sandbox".
  *  - The process runs in its own PID namespace, so other processes on the
  *    system are invisible.
@@ -68,12 +67,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <string>
 #include <vector>
 
 int global_outer_uid;
 int global_outer_gid;
 
-static char global_sandbox_root[] = "/tmp/sandbox.XXXXXX";
 static int global_child_pid;
 
 // The signal that will be sent to the child when a timeout occurs.
@@ -116,22 +115,6 @@ static void CloseFds() {
 
   if (closedir(fds) < 0) {
     DIE("closedir");
-  }
-}
-
-static void RemoveSandboxRoot() {
-  if (rmdir(global_sandbox_root) < 0) {
-    DIE("rmdir(%s)", global_sandbox_root);
-  }
-}
-
-static void SetupSandboxRoot() {
-  if (opt.sandbox_root_dir == NULL) {
-    if (mkdtemp(global_sandbox_root) == NULL) {
-      DIE("mkdtemp(%s)", global_sandbox_root);
-    }
-    atexit(RemoveSandboxRoot);
-    opt.sandbox_root_dir = global_sandbox_root;
   }
 }
 
@@ -228,12 +211,12 @@ static int WaitForPid1() {
   }
 }
 
-static void Redirect(const char *target_path, int fd, const char *name) {
-  if (target_path != NULL && strcmp(target_path, "-") != 0) {
+static void Redirect(const std::string &target_path, int fd) {
+  if (!target_path.empty() && target_path != "-") {
     const int flags = O_WRONLY | O_CREAT | O_TRUNC | O_APPEND;
-    int fd_out = open(target_path, flags, 0666);
+    int fd_out = open(target_path.c_str(), flags, 0666);
     if (fd_out < 0) {
-      DIE("open(%s)", target_path);
+      DIE("open(%s)", target_path.c_str());
     }
     // If we were launched with less than 3 fds (stdin, stdout, stderr) open,
     // but redirection is still requested via a command-line flag, something is
@@ -242,7 +225,7 @@ static void Redirect(const char *target_path, int fd, const char *name) {
     if (fd_out < 3) {
       DIE("open(%s) returned a handle that is reserved for stdin / stdout / "
           "stderr",
-          target_path);
+          target_path.c_str());
     }
     if (dup2(fd_out, fd) < 0) {
       DIE("dup2()");
@@ -253,14 +236,6 @@ static void Redirect(const char *target_path, int fd, const char *name) {
   }
 }
 
-static void RedirectStdout(const char *stdout_path) {
-  Redirect(stdout_path, STDOUT_FILENO, "stdout");
-}
-
-static void RedirectStderr(const char *stderr_path) {
-  Redirect(stderr_path, STDERR_FILENO, "stderr");
-}
-
 int main(int argc, char *argv[]) {
   // Ask the kernel to kill us with SIGKILL if our parent dies.
   if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0) {
@@ -269,8 +244,8 @@ int main(int argc, char *argv[]) {
 
   ParseOptions(argc, argv);
 
-  RedirectStdout(opt.stdout_path);
-  RedirectStderr(opt.stderr_path);
+  Redirect(opt.stdout_path, STDOUT_FILENO);
+  Redirect(opt.stderr_path, STDERR_FILENO);
 
   // This should never be called as a setuid binary, drop privileges just in
   // case. We don't need to be root, because we use user namespaces anyway.
@@ -284,8 +259,6 @@ int main(int argc, char *argv[]) {
   // Make sure the sandboxed process does not inherit any accidentally left open
   // file handles from our parent.
   CloseFds();
-
-  SetupSandboxRoot();
 
   HandleSignal(SIGALRM, OnTimeout);
   if (opt.timeout_secs > 0) {

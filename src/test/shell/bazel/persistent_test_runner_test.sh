@@ -17,12 +17,18 @@
 # Correctness tests for using a Persistent TestRunner.
 #
 
+if is_windows; then
+  echo "Persistent test runner functionality not ready for windows" >&2
+  exit 0
+fi
+
 # Load the test setup defined in the parent directory
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${CURRENT_DIR}/../integration_test_setup.sh" \
   || { echo "integration_test_setup.sh not found!" >&2; exit 1; }
 
 function test_simple_scenario() {
+  setup_javatest_support
   mkdir -p java/testrunners || fail "mkdir failed"
 
   cat > java/testrunners/TestsPass.java <<EOF
@@ -63,25 +69,26 @@ EOF
   cat > java/testrunners/BUILD <<EOF
 java_test(name = "TestsPass",
           srcs = ['TestsPass.java'],
-          tags = ["experimental_testrunner"],
+          deps = ['//third_party:junit4'],
 )
 
 java_test(name = "TestsFail",
           srcs = ['TestsFail.java'],
-          tags = ["experimental_testrunner"],
+          deps = ['//third_party:junit4'],
 )
 EOF
 
-  bazel test --test_strategy=experimental_worker //java/testrunners:TestsPass \
-      || fail "Test fails unexpectedly"
+  bazel test --explicit_java_test_deps --experimental_testrunner --test_strategy=experimental_worker \
+      //java/testrunners:TestsPass || fail "Test fails unexpectedly"
 
-  bazel test --test_strategy=experimental_worker //java/testrunners:TestsFail \
-      && fail "Test passes unexpectedly" \
-      || true
+  bazel test --explicit_java_test_deps --experimental_testrunner --test_strategy=experimental_worker \
+      --test_output=all //java/testrunners:TestsFail &> $TEST_log \
+      && fail "Test passes unexpectedly" || true
+  expect_log "Test is supposed to fail"
 }
 
-# TODO(kush): Enable this test once we're able to reload modified classes in persistent test runner.
-function DISABLED_test_reload_modified_classes() {
+function test_reload_modified_classes() {
+  setup_javatest_support
   mkdir -p java/testrunners || fail "mkdir failed"
 
   # Create a passing test.
@@ -105,11 +112,12 @@ EOF
   cat > java/testrunners/BUILD <<EOF
 java_test(name = "Tests",
           srcs = ['Tests.java'],
+          deps = ['//third_party:junit4'],
 )
 EOF
 
-  bazel test --test_strategy=experimental_worker //java/testrunners:Tests &> $TEST_log \
-      || fail "Test fails unexpectedly"
+  bazel test --explicit_java_test_deps --experimental_testrunner --test_strategy=experimental_worker \
+      //java/testrunners:Tests &> $TEST_log || fail "Test fails unexpectedly"
 
   # Now get the test to fail.
   cat > java/testrunners/Tests.java <<EOF
@@ -130,9 +138,94 @@ public class Tests {
 }
 EOF
 
-  bazel test --test_strategy=experimental_worker //java/testrunners:Tests &> $TEST_log \
-      && fail "Test passes unexpectedly" \
-      || true
+  bazel test --explicit_java_test_deps --experimental_testrunner --test_strategy=experimental_worker \
+      --test_output=all --nocache_test_results //java/testrunners:Tests &> $TEST_log \
+      && fail "Test passes unexpectedly" || true
+  expect_log "Test is supposed to fail now"
+}
+
+function test_reload_modified_classpaths() {
+  setup_javatest_support
+  mkdir -p java/testrunners || fail "mkdir failed"
+
+  # Create a passing test.
+  cat > java/testrunners/Tests.java <<EOF
+package testrunners;
+import static org.junit.Assert.fail;
+
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+import org.junit.Test;
+
+@RunWith(JUnit4.class)
+public class Tests {
+
+  @Test
+  public void testPass() {
+    // This passes
+  }
+}
+EOF
+
+  cat > java/testrunners/BUILD <<EOF
+java_test(name = "Tests",
+          srcs = ['Tests.java'],
+          deps = ['//third_party:junit4'],
+)
+EOF
+
+  bazel test --explicit_java_test_deps --experimental_testrunner --test_strategy=experimental_worker \
+      //java/testrunners:Tests &> $TEST_log || fail "Test fails unexpectedly"
+
+  # Create a library to add a dep.
+  cat > java/testrunners/TrueVal.java <<EOF
+package testrunners;
+
+public class TrueVal {
+  public static final boolean VAL = true;
+}
+EOF
+
+  # Now get the test to fail depending on the library
+  cat > java/testrunners/Tests.java <<EOF
+package testrunners;
+import static org.junit.Assert.fail;
+
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+import org.junit.Test;
+
+@RunWith(JUnit4.class)
+public class Tests {
+
+  @Test
+  public void testFail() {
+    if (TrueVal.VAL) {
+      fail("Supposed to fail now.");
+    }
+  }
+}
+EOF
+
+  # Add an additional library to the classpath.
+  cat > java/testrunners/BUILD <<EOF
+java_library(name = "trueval",
+             srcs = ["TrueVal.java"],
+)
+
+java_test(name = "Tests",
+          srcs = ['Tests.java'],
+          deps = [
+                   ':trueval',
+                   '//third_party:junit4'
+                 ],
+)
+EOF
+
+  bazel test --explicit_java_test_deps --experimental_testrunner --test_strategy=experimental_worker \
+      --test_output=all --nocache_test_results //java/testrunners:Tests &> $TEST_log \
+       && fail "Test passes unexpectedly" || true
+  expect_log "Supposed to fail now."
 }
 
 function test_fail_without_testrunner() {
@@ -151,24 +244,23 @@ EOF
 java_test(name = "TestWithoutRunner",
           srcs = ['TestWithoutRunner.java'],
           use_testrunner = 0,
-          tags = ["experimental_testrunner"],
           main_class = "testrunners.TestWithoutRunner"
 )
 EOF
 
-  bazel test --no_cache_test_results //java/testrunners:TestWithoutRunner >& $TEST_log \
-      || fail "Normal test execution should pass."
+  bazel test --explicit_java_test_deps --experimental_testrunner --nocache_test_results \
+      //java/testrunners:TestWithoutRunner >& $TEST_log || fail "Normal test execution should pass."
 
-  bazel test --no_cache_test_results --test_strategy=experimental_worker >& $TEST_log \
-      //java/testrunners:TestWithoutRunner \
-      && fail "Test should have failed when running with an experimental runner." \
-      || true
+  bazel test --explicit_java_test_deps --experimental_testrunner --nocache_test_results \
+      --test_strategy=experimental_worker >& $TEST_log //java/testrunners:TestWithoutRunner \
+      && fail "Test should have failed when running with an experimental runner." || true
 
   expect_log \
       "Tests that do not use the experimental test runner are incompatible with the persistent worker"
 }
 
 function test_fail_without_experimental_testrunner() {
+  setup_javatest_support
   mkdir -p java/testrunners || fail "mkdir failed"
 
   cat > java/testrunners/Tests.java <<EOF
@@ -191,19 +283,19 @@ EOF
   cat > java/testrunners/BUILD <<EOF
 java_test(name = "Tests",
           srcs = ['Tests.java'],
+          deps = ['//third_party:junit4'],
 )
 EOF
 
-  bazel test --no_cache_test_results //java/testrunners:Tests >& $TEST_log \
+  bazel test --nocache_test_results //java/testrunners:Tests >& $TEST_log \
       || fail "Normal test execution should pass."
 
-  bazel test --no_cache_test_results --test_strategy=experimental_worker >& $TEST_log \
+  bazel test --nocache_test_results --test_strategy=experimental_worker >& $TEST_log \
       //java/testrunners:Tests \
       && fail "Test should have failed when running with an experimental runner." \
       || true
 
-  expect_log \
-      "Tests that do not use the experimental test runner are incompatible with the persistent worker"
+  expect_log "Build configuration not compatible with experimental_worker"
 }
 
 run_suite "Persistent Test Runner tests"

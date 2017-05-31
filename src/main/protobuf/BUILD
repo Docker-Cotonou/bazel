@@ -1,11 +1,10 @@
 package(default_visibility = ["//visibility:public"])
 
 load("//tools/build_rules:genproto.bzl", "java_proto_library", "cc_grpc_library")
-load("//third_party/protobuf/3.0.0:protobuf.bzl", "cc_proto_library", "py_proto_library")
+load("//third_party/protobuf/3.2.0:protobuf.bzl", "cc_proto_library", "py_proto_library")
 
 FILES = [
     "build",
-    "dash",
     "deps",
     "java_compilation",
     "crosstool_config",

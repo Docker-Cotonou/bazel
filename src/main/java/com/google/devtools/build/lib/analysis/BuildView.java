@@ -31,6 +31,7 @@ import com.google.common.collect.Sets;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionGraph;
+import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
@@ -54,19 +55,23 @@ import com.google.devtools.build.lib.packages.AspectClass;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
 import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
+import com.google.devtools.build.lib.packages.Attribute.Transition;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
+import com.google.devtools.build.lib.packages.NoSuchPackageException;
+import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.PackageSpecification;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.RuleTransitionFactory;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.pkgcache.LoadingResult;
 import com.google.devtools.build.lib.rules.test.CoverageReportActionFactory;
 import com.google.devtools.build.lib.rules.test.CoverageReportActionFactory.CoverageReportActionsWrapper;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
-import com.google.devtools.build.lib.skyframe.ActionLookupValue;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
 import com.google.devtools.build.lib.skyframe.AspectValue.AspectValueKey;
@@ -90,6 +95,7 @@ import com.google.devtools.build.skyframe.WalkableGraph;
 import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
+import com.google.devtools.common.options.OptionsParser.OptionUsageRestrictions;
 import com.google.devtools.common.options.OptionsParsingException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -151,9 +157,9 @@ import javax.annotation.Nullable;
 public class BuildView {
 
   /**
-   * Options that affect the <i>mechanism</i> of analysis.  These are distinct from {@link
-   * com.google.devtools.build.lib.analysis.config.BuildOptions}, which affect the <i>value</i>
-   * of a BuildConfiguration.
+   * Options that affect the <i>mechanism</i> of analysis. These are distinct from {@link
+   * com.google.devtools.build.lib.analysis.config.BuildOptions}, which affect the <i>value</i> of a
+   * BuildConfiguration.
    */
   public static class Options extends OptionsBase {
     @Option(
@@ -165,42 +171,54 @@ public class BuildView {
     )
     public int loadingPhaseThreads;
 
-    @Option(name = "keep_going",
-            abbrev = 'k',
-            defaultValue = "false",
-            category = "strategy",
-            help = "Continue as much as possible after an error.  While the"
-                + " target that failed, and those that depend on it, cannot be"
-                + " analyzed (or built), the other prerequisites of these"
-                + " targets can be analyzed (or built) all the same.")
+    @Option(
+      name = "keep_going",
+      abbrev = 'k',
+      defaultValue = "false",
+      category = "strategy",
+      help =
+          "Continue as much as possible after an error.  While the target that failed, and those "
+              + "that depend on it, cannot be analyzed (or built), the other prerequisites of "
+              + "these targets can be analyzed (or built) all the same."
+    )
     public boolean keepGoing;
 
-    @Option(name = "analysis_warnings_as_errors",
-            deprecationWarning = "analysis_warnings_as_errors is now a no-op and will be removed in"
-                              + " an upcoming Blaze release",
-            defaultValue = "false",
-            category = "strategy",
-            help = "Treat visible analysis warnings as errors.")
+    @Option(
+      name = "analysis_warnings_as_errors",
+      deprecationWarning =
+          "analysis_warnings_as_errors is now a no-op and will be removed in"
+              + " an upcoming Blaze release",
+      defaultValue = "false",
+      category = "strategy",
+      help = "Treat visible analysis warnings as errors."
+    )
     public boolean analysisWarningsAsErrors;
 
-    @Option(name = "discard_analysis_cache",
-            defaultValue = "false",
-            category = "strategy",
-            help = "Discard the analysis cache immediately after the analysis phase completes."
-                + " Reduces memory usage by ~10%, but makes further incremental builds slower.")
+    @Option(
+      name = "discard_analysis_cache",
+      defaultValue = "false",
+      category = "strategy",
+      help =
+          "Discard the analysis cache immediately after the analysis phase completes."
+              + " Reduces memory usage by ~10%, but makes further incremental builds slower."
+    )
     public boolean discardAnalysisCache;
 
-    @Option(name = "experimental_extra_action_filter",
-            defaultValue = "",
-            category = "experimental",
-            converter = RegexFilter.RegexFilterConverter.class,
-            help = "Filters set of targets to schedule extra_actions for.")
+    @Option(
+      name = "experimental_extra_action_filter",
+      defaultValue = "",
+      category = "experimental",
+      converter = RegexFilter.RegexFilterConverter.class,
+      help = "Filters set of targets to schedule extra_actions for."
+    )
     public RegexFilter extraActionFilter;
 
-    @Option(name = "experimental_extra_action_top_level_only",
-            defaultValue = "false",
-            category = "experimental",
-            help = "Only schedules extra_actions for top level targets.")
+    @Option(
+      name = "experimental_extra_action_top_level_only",
+      defaultValue = "false",
+      category = "experimental",
+      help = "Only schedules extra_actions for top level targets."
+    )
     public boolean extraActionTopLevelOnly;
 
     @Option(
@@ -215,12 +233,15 @@ public class BuildView {
     )
     public boolean extraActionTopLevelOnlyWithAspects;
 
-    @Option(name = "version_window_for_dirty_node_gc",
-            defaultValue = "0",
-            category = "undocumented",
-            help = "Nodes that have been dirty for more than this many versions will be deleted"
-                + " from the graph upon the next update. Values must be non-negative long integers,"
-                + " or -1 indicating the maximum possible window.")
+    @Option(
+      name = "version_window_for_dirty_node_gc",
+      defaultValue = "0",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      help =
+          "Nodes that have been dirty for more than this many versions will be deleted"
+              + " from the graph upon the next update. Values must be non-negative long integers,"
+              + " or -1 indicating the maximum possible window."
+    )
     public long versionWindowForDirtyNodeGc;
 
     @Deprecated
@@ -473,7 +494,7 @@ public class BuildView {
         String bzlFileLoadLikeString = aspect.substring(0, delimiterPosition);
         if (!bzlFileLoadLikeString.startsWith("//") && !bzlFileLoadLikeString.startsWith("@")) {
           // "Legacy" behavior of '--aspects' parameter.
-          bzlFileLoadLikeString = new PathFragment("/" + bzlFileLoadLikeString).toString();
+          bzlFileLoadLikeString = PathFragment.create("/" + bzlFileLoadLikeString).toString();
           if (bzlFileLoadLikeString.endsWith(".bzl")) {
             bzlFileLoadLikeString = bzlFileLoadLikeString.substring(0,
                 bzlFileLoadLikeString.length() - ".bzl".length());
@@ -505,9 +526,12 @@ public class BuildView {
       } else {
         final NativeAspectClass aspectFactoryClass =
             ruleClassProvider.getNativeAspectClassMap().get(aspect);
+
         if (aspectFactoryClass != null) {
+          AspectParameters aspectParameters = AspectParameters.EMPTY;
+          boolean applyToFiles = aspectFactoryClass.getDefinition(aspectParameters).applyToFiles();
           for (TargetAndConfiguration targetSpec : topLevelTargetsWithConfigs) {
-            if (!(targetSpec.getTarget() instanceof Rule)) {
+            if (!applyToFiles && !(targetSpec.getTarget() instanceof Rule)) {
               continue;
             }
             // For invoking top-level aspects, use the top-level configuration for both the
@@ -517,7 +541,7 @@ public class BuildView {
                 AspectValue.createAspectKey(
                     targetSpec.getLabel(),
                     configuration,
-                    new AspectDescriptor(aspectFactoryClass, AspectParameters.EMPTY),
+                    new AspectDescriptor(aspectFactoryClass, aspectParameters),
                     configuration
                 ));
           }
@@ -636,7 +660,7 @@ public class BuildView {
                 throw new IllegalStateException(
                     "Interruption not expected from this graph: " + key, e);
               }
-              return val == null ? null : val.getGeneratingAction(artifact);
+              return val == null ? null : val.getGeneratingActionDangerousReadJavadoc(artifact);
             }
             return null;
           }
@@ -855,11 +879,12 @@ public class BuildView {
 
       Attribute.Transition ruleclassTransition = null;
       if (targetAndConfig.getTarget().getAssociatedRule() != null) {
-        ruleclassTransition = targetAndConfig
-            .getTarget()
-            .getAssociatedRule()
-            .getRuleClassObject()
-            .getTransition();
+        Rule associatedRule = targetAndConfig.getTarget().getAssociatedRule();
+        RuleTransitionFactory transitionFactory =
+            associatedRule.getRuleClassObject().getTransitionFactory();
+        if (transitionFactory != null) {
+          ruleclassTransition = transitionFactory.buildTransitionFor(associatedRule);
+        }
       }
       if (targetAndConfig.getConfiguration() != null) {
         asDeps.put(targetAndConfig.getConfiguration(),
@@ -949,16 +974,6 @@ public class BuildView {
     if (Thread.interrupted()) {
       throw new InterruptedException();
     }
-  }
-
-  /**
-   * Drops the analysis cache. If building with Skyframe, targets in {@code topLevelTargets} may
-   * remain in the cache for use during the execution phase.
-   *
-   * @see BuildView.Options#discardAnalysisCache
-   */
-  public void clearAnalysisCache(Collection<ConfiguredTarget> topLevelTargets) {
-    skyframeBuildView.clearAnalysisCache(topLevelTargets);
   }
 
   // For testing
@@ -1086,14 +1101,43 @@ public class BuildView {
     return result;
   }
 
+  private Transition getTopLevelTransitionForTarget(Label label, ExtendedEventHandler handler) {
+    Rule rule;
+    try {
+      rule = skyframeExecutor
+          .getPackageManager()
+          .getTarget(handler, label)
+          .getAssociatedRule();
+    } catch (NoSuchPackageException | NoSuchTargetException e) {
+      return ConfigurationTransition.NONE;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError("Configuration of " + label + " interrupted");
+    }
+    if (rule == null) {
+      return ConfigurationTransition.NONE;
+    }
+    RuleTransitionFactory factory = rule
+        .getRuleClassObject()
+        .getTransitionFactory();
+    if (factory == null) {
+      return ConfigurationTransition.NONE;
+    }
+    Transition transition = factory.buildTransitionFor(rule);
+    return (transition == null) ? ConfigurationTransition.NONE : transition;
+  }
+
   /**
-   * Returns a configured target for the specified target and configuration. Returns {@code null} if
-   * something goes wrong.
+   * Returns a configured target for the specified target and configuration. If dynamic
+   * configurations are activated, and the target in question has a top-level rule class transition,
+   * that transition is applied in the returned ConfiguredTarget. Returns {@code null} if something
+   * goes wrong.
    */
   @VisibleForTesting
   public ConfiguredTarget getConfiguredTargetForTesting(
       ExtendedEventHandler eventHandler, Label label, BuildConfiguration config) {
-    return skyframeExecutor.getConfiguredTargetForTesting(eventHandler, label, config);
+    return skyframeExecutor.getConfiguredTargetForTesting(eventHandler, label, config,
+        getTopLevelTransitionForTarget(label, eventHandler));
   }
 
   /**

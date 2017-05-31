@@ -344,6 +344,7 @@ public class Artifact
     return root;
   }
 
+  @Override
   public final PathFragment getExecPath() {
     return execPath;
   }
@@ -542,11 +543,10 @@ public class Artifact
    */
   public final PathFragment getRunfilesPath() {
     PathFragment relativePath = rootRelativePath;
-    if (relativePath.segmentCount() > 1
-        && relativePath.getSegment(0).equals(Label.EXTERNAL_PATH_PREFIX)) {
+    if (relativePath.startsWith(Label.EXTERNAL_PATH_PREFIX)) {
       // Turn external/repo/foo into ../repo/foo.
       relativePath = relativePath.relativeTo(Label.EXTERNAL_PATH_PREFIX);
-      relativePath = new PathFragment("..").getRelative(relativePath);
+      relativePath = PathFragment.create("..").getRelative(relativePath);
     }
     return relativePath;
   }
@@ -623,7 +623,7 @@ public class Artifact
 
   @Override
   public final String toString() {
-    return "Artifact:" + toDetailString();
+    return "File:" + toDetailString();
   }
 
   /**

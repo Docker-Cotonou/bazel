@@ -9,7 +9,7 @@ title: Rules
 
 A rule defines a series of [actions](#actions) that Bazel should perform on
 inputs to get a set of outputs. For example, a C++ binary rule might take a set
-of .cpp files (the inputs), run `g++` on them (the action), and return an
+of `.cpp` files (the inputs), run `g++` on them (the action), and return an
 executable file (the output).
 
 Note that, from Bazel's perspective, `g++` and the standard C++ libraries are
@@ -55,7 +55,7 @@ the attributes and their types when you define a rule.
 
 ```python
 sum = rule(
-    implementation = impl,
+    implementation = _impl,
     attrs = {
         "number": attr.int(default = 1),
         "deps": attr.label_list(),
@@ -78,19 +78,23 @@ See [an example](cookbook.md#attr) of using `attr` in a rule.
 
 ### <a name="private-attributes"></a> Private Attributes
 
-If an attribute name starts with `_` it is private and users cannot set it. It
-is useful in particular for label attributes (your rule will have an
+In Python, we use one leading underscore(`_`) for non-public methods and
+instance variables (see [PEP-8][1]).
+
+Similarly, if an attribute name starts with `_` it is private and users cannot
+set it.
+It is useful in particular for label attributes (your rule will have an
 implicit dependency on this label).
 
 ```python
 metal_compile = rule(
-    implementation=impl,
-    attrs={
+    implementation = _impl,
+    attrs = {
         "srcs": attr.label_list(),
         "_compiler": attr.label(
-            default=Label("//tools:metalc"),
-            allow_single_file=True,
-            executable=True,
+            default = Label("//tools:metalc"),
+            allow_single_file = True,
+            executable = True,
         ),
     },
 )
@@ -108,16 +112,12 @@ has some helper functions. See [the library](lib/ctx.html) for more context.
 Example:
 
 ```python
-def impl(ctx):
+def _impl(ctx):
   ...
-  return struct(
-      runfiles=...,
-      my_provider=...,
-      ...
-  )
+  return [DefaultInfo(runfiles=...),  MyInfo(...)]
 
 my_rule = rule(
-    implementation=impl,
+    implementation = _impl,
     ...
 )
 ```
@@ -153,14 +153,14 @@ my_rule(
 In the above case, it's possible to access targets declared in `my_rule.deps`:
 
 ```python
-def impl(ctx):
+def _impl(ctx):
   for dep in ctx.attr.deps:
     # Do something with dep
   ...
 
 my_rule = rule(
-    implementation=impl,
-    attrs={
+    implementation = _impl,
+    attrs = {
         "deps": attr.label_list(),
     },
     ...
@@ -290,7 +290,7 @@ machine, assuming those dependencies do not themselves have transitions.
 For each [label attribute](lib/attr.html#label), you can decide whether the
 dependency should be built in the same configuration, or transition to the host
 configuration (using `cfg`). If a label attribute has the flag
-`executable=True`, the configuration must be set explictly.
+`executable=True`, the configuration must be set explicitly.
 [See example](cookbook.html#execute-a-binary)
 
 In general, sources, dependent libraries, and executables that will be needed at
@@ -299,6 +299,10 @@ runtime can use the same configuration.
 Tools that are executed as part of the build (e.g., compilers, code generators)
 should be built for the host configuration. In this case, specify `cfg="host"`
 in the attribute.
+
+Otherwise, executables that are used at runtime (e.g. as part of a test) should
+be built for the target configuration. In this case, specify `cfg="target"` in
+the attribute.
 
 The configuration `"data"` is present for legacy reasons and should be used for
 the `data` attributes.
@@ -310,15 +314,15 @@ such as `cpp`, `java` and `jvm`. However, all required fragments must be
 declared in order to avoid access errors:
 
 ```python
-def impl(ctx):
+def _impl(ctx):
     # Using ctx.fragments.cpp would lead to an error since it was not declared.
     x = ctx.fragments.java
     ...
 
 my_rule = rule(
-    implementation=impl,
-    fragments=["java"],      # Required fragments of the target configuration
-    host_fragments=["java"], # Required fragments of the host configuration
+    implementation = _impl,
+    fragments = ["java"],      # Required fragments of the target configuration
+    host_fragments = ["java"], # Required fragments of the host configuration
     ...
 )
 ```
@@ -346,45 +350,71 @@ information can be accumulated from all dependencies. In such cases, consider
 using [depsets](depsets.md) to hold the data more efficiently without excessive
 copying.
 
-The following data types can be passed using providers:
+Providers can be declared using the [provider()](lib/globals.html#provider) function:
 
-* [bool](lib/bool.html)
-* [integer](lib/int.html)
-* [string](lib/string.html)
-* [file](lib/File.html)
-* [label](lib/Label.html)
-* [None](lib/globals.html#None)
-* anything composed of these types and [lists](lib/list.html),
- [dicts](lib/dict.html),  [depsets](lib/depset.html) or
- [structs](lib/struct.html).
+```python
+TransitiveDataInfo = provider()
+```
 
-Providers are created from the return value of the rule implementation function:
+Rule implementation function can then construct and return provider instances:
 
 ```python
 def rule_implementation(ctx):
   ...
-  return struct(
-    transitive_data=depset(["a", "b", "c"])
-  )
+  return [TransitiveDataInfo(value = ["a", "b", "c"])]
 ```
 
-A dependent rule might access these data as struct fields of the `target` being
-depended upon:
+`TransitiveDataInfo` acts both as a constructor for provider instances and as a key to access them.
+A [target](lib/Target.html) serves as a map from each provider that the target supports, to the
+target's corresponding instance of that provider.
+A rule can access the providers of its dependencies using the square bracket notation (`[]`):
 
 ```python
 def dependent_rule_implementation(ctx):
   ...
   s = depset()
   for dep_target in ctx.attr.deps:
-    # Use `print(dir(dep_target))` to see the list of providers.
-    s += dep_target.transitive_data
+    s += dep_target[TransitiveDataInfo].value
   ...
 ```
+
+All targets have a [`DefaultInfo`](lib/globals.html#DefaultInfo) provider that can be used to access
+some information relevant to all targets.
 
 Providers are only available during the analysis phase. Examples of usage:
 
 * [mandatory providers](cookbook.md#mandatory-providers)
 * [optional providers](cookbook.md#optional-providers)
+
+> *Note:*
+> Historically, Bazel also supported provider instances that are identified by strings and
+> accessed as fields on the `target` object instead of as keys. This style is deprecated
+> but still supported. Return legacy providers as follows:
+>
+```python
+def rule_implementation(ctx):
+  ...
+  modern_provider = TransitiveDataInfo(value = ["a", "b", "c"])
+  # Legacy style.
+  return struct(legacy_provider = struct(...),
+                another_legacy_provider = struct(...),
+                # The `providers` field contains provider instances that can be accessed
+                # the "modern" way.
+                providers = [modern_provider])
+```
+> To access legacy providers, use the dot notation.
+> Note that the same target can define both modern and legacy providers:
+>
+```python
+def dependent_rule_implementation(ctx):
+  ...
+  s = depset()
+  for dep_target in ctx.attr.deps:
+    x = dep_target.legacy_provider            # legacy style
+    s += dep_target[TransitiveDataInfo].value # modern style
+  ...
+```
+> **We recommend using modern providers for all future code.**
 
 ## Runfiles
 
@@ -399,7 +429,7 @@ Runfiles can be added manually during rule creation and/or collected
 transitively from the rule's dependencies:
 
 ```python
-def rule_implementation(ctx):
+def _rule_implementation(ctx):
   ...
   transitive_runfiles = depset()
   for dep in ctx.attr.special_dependencies:
@@ -407,16 +437,16 @@ def rule_implementation(ctx):
 
   runfiles = ctx.runfiles(
       # Add some files manually.
-      files=[ctx.file.some_data_file],
+      files = [ctx.file.some_data_file],
       # Add transitive files from dependencies manually.
-      transitive_files=transitive_runfiles,
+      transitive_files = transitive_runfiles,
       # Collect runfiles from the common locations: transitively from srcs,
       # deps and data attributes.
-      collect_default=True,
+      collect_default = True,
   )
-  # Add a field named "runfiles" to the return struct in order to actually
+  # Add a field named "runfiles" to the DefaultInfo provider in order to actually
   # create the symlink tree.
-  return struct(runfiles=runfiles)
+  return [DefaultInfo(runfiles=runfiles)]
 ```
 
 Note that non-executable rule outputs can also have runfiles. For example, a
@@ -437,8 +467,8 @@ name of the workspace.
 ```python
     ...
     runfiles = ctx.runfiles(
-        root_symlinks={"some/path/here.foo": ctx.file.some_data_file2}
-        symlinks={"some/path/here.bar": ctx.file.some_data_file3}
+        root_symlinks = {"some/path/here.foo": ctx.file.some_data_file2}
+        symlinks = {"some/path/here.bar": ctx.file.some_data_file3}
     )
     # Creates something like:
     # sometarget.runfiles/
@@ -464,19 +494,19 @@ A rule can use the `instrumented_files` provider to provide information about
 which files should be measured when code coverage data collection is enabled:
 
 ```python
-def rule_implementation(ctx):
+def _rule_implementation(ctx):
   ...
-  return struct(instrumented_files=struct(
+  return struct(instrumented_files = struct(
       # Optional: File extensions used to filter files from source_attributes.
       # If not provided, then all files from source_attributes will be
       # added to instrumented files, if an empty list is provided, then
       # no files from source attributes will be added.
-      extensions=["ext1", "ext2"],
+      extensions = ["ext1", "ext2"],
       # Optional: Attributes that contain source files for this rule.
-      source_attributes=["srcs"],
+      source_attributes = ["srcs"],
       # Optional: Attributes for dependencies that could include instrumented
       # files.
-      dependency_attributes=["data", "deps"]))
+      dependency_attributes = ["data", "deps"]))
 ```
 
 [ctx.config.coverage_enabled](lib/configuration.html#coverage_enabled) notes
@@ -531,3 +561,5 @@ the `implementation` function of the rule must generate the output file
 
 Test rules inherit the following attributes: `args`, `flaky`, `local`,
 `shard_count`, `size`, `timeout`.
+
+[1]: https://www.python.org/dev/peps/pep-0008/#id46

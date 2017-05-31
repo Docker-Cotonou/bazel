@@ -88,7 +88,7 @@ public final class TestActionBuilder {
     // heuristically sharding is currently experimental. Also, we do detect
     // false-positive cases and return an error.
     return runfilesSupport.getRunfilesSymlinkNames().contains(
-        new PathFragment("tools/test_sharding_compliant"));
+        PathFragment.create("tools/test_sharding_compliant"));
   }
 
   /**
@@ -180,7 +180,7 @@ public final class TestActionBuilder {
    *    TestResultAnalyzer to keep track of completed and pending test runs.
    */
   private TestParams createTestAction(int shards) {
-    PathFragment targetName = new PathFragment(ruleContext.getLabel().getName());
+    PathFragment targetName = PathFragment.create(ruleContext.getLabel().getName());
     BuildConfiguration config = ruleContext.getConfiguration();
     AnalysisEnvironment env = ruleContext.getAnalysisEnvironment();
     Root root = config.getTestLogsDirectory(ruleContext.getRule().getRepository());
@@ -250,14 +250,9 @@ public final class TestActionBuilder {
     List<Artifact> results = Lists.newArrayListWithCapacity(runsPerTest * shardRuns);
     ImmutableList.Builder<Artifact> coverageArtifacts = ImmutableList.builder();
 
-    boolean useExperimentalTestRunner = false;
+    boolean useTestRunner = false;
     if (ruleContext.attributes().has("use_testrunner", Type.BOOLEAN)) {
-      useExperimentalTestRunner =
-          ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)
-              && ruleContext
-                  .attributes()
-                  .get("tags", Type.STRING_LIST)
-                  .contains("experimental_testrunner");
+      useTestRunner = ruleContext.attributes().get("use_testrunner", Type.BOOLEAN);
     }
 
     for (int run = 0; run < runsPerTest; run++) {
@@ -287,19 +282,13 @@ public final class TestActionBuilder {
           coverageArtifacts.add(coverageArtifact);
         }
 
-        Artifact microCoverageArtifact = null;
-        if (collectCodeCoverage && config.isMicroCoverageEnabled()) {
-          microCoverageArtifact = ruleContext.getPackageRelativeArtifact(
-              targetName.getRelative(shardRunDir + "coverage.micro.dat"), root);
-        }
-
         env.registerAction(new TestRunnerAction(
             ruleContext.getActionOwner(), inputs, testRuntime,
             testLog, cacheStatus,
-            coverageArtifact, microCoverageArtifact,
+            coverageArtifact,
             testProperties, testEnv, executionSettings,
             shard, run, config, ruleContext.getWorkspaceName(),
-            useExperimentalTestRunner));
+            useTestRunner));
         results.add(cacheStatus);
       }
     }

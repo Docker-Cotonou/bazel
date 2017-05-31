@@ -43,6 +43,7 @@ sleep 1
 exit 0
 EOF
   chmod 755 pkg/slowtest.sh
+  touch pkg/sourcefileA pkg/sourcefileB pkg/sourcefileC
   cat > pkg/BUILD <<EOF
 sh_test(
   name = "true",
@@ -72,6 +73,24 @@ genrule(
   cmd = "echo foo > \\"\$@\\"",
   tags = ["tag1", "tag2"]
 )
+action_listener(
+    name = "listener",
+    mnemonics = ["Genrule"],
+    extra_actions = [":extra"],
+    visibility = ["//visibility:public"],
+)
+extra_action(
+   name = "extra",
+   cmd = "echo Hello World",
+)
+filegroup(
+  name = "innergroup",
+  srcs = ["sourcefileA", "sourcefileB"],
+)
+filegroup(
+  name = "outergroup",
+  srcs = ["sourcefileC", ":innergroup"],
+)
 EOF
 cat > simpleaspect.bzl <<EOF
 def _simple_aspect_impl(target, ctx):
@@ -86,6 +105,11 @@ def _simple_aspect_impl(target, ctx):
 simple_aspect = aspect(implementation=_simple_aspect_impl)
 EOF
 touch BUILD
+cat > sample_workspace_status <<EOF
+#!/bin/sh
+echo SAMPLE_WORKSPACE_STATUS workspace_status_value
+EOF
+chmod  755 sample_workspace_status
 }
 
 #### TESTS #############################################################
@@ -95,14 +119,31 @@ function test_basic() {
   # - a completed target explicity requested should be reported
   # - after success the stream should close naturally, without any
   #   reports about aborted events.
+  # - no events occur in an unsolicited way
+  # - the command line is reported
   bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
     || fail "bazel test failed"
   expect_log 'pkg:true'
+  # Command line
+  expect_log 'args: "test"'
+  expect_log 'args: "--experimental_build_event_text_file='
+  expect_log 'args: "pkg:true"'
   # Build Finished
   expect_log 'build_finished'
-  expect_log 'overall_success: true'
+  expect_log 'SUCCESS'
   expect_log 'finish_time'
   expect_not_log 'aborted'
+  # target kind for the sh_test
+  expect_log 'target_kind:.*sh'
+}
+
+function test_workspace_status() {
+  bazel test --experimental_build_event_text_file=$TEST_log \
+     --workspace_status_command=sample_workspace_status pkg:true \
+    || fail "bazel test failed"
+  expect_log_once '^workspace_status'
+  expect_log 'key.*SAMPLE_WORKSPACE_STATUS'
+  expect_log 'value.*workspace_status_value'
 }
 
 function test_suite() {
@@ -121,9 +162,8 @@ function test_test_summary() {
   bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
     || fail "bazel test failed"
   expect_log_once '^test_summary '
-  expect_log_once '^progress '
   expect_not_log 'aborted'
-  expect_log_once 'status.*PASSED'
+  expect_log 'status.*PASSED'
   expect_not_log 'status.*FAILED'
   expect_not_log 'status.*FLAKY'
 }
@@ -137,9 +177,8 @@ function test_test_inidivual_results() {
     || fail "bazel test failed"
   expect_log '^test_result'
   expect_log 'run.*1'
-  expect_log 'success.*true'
+  expect_log 'status.*PASSED'
   expect_log_once '^test_summary '
-  expect_log_once '^progress '
   expect_not_log 'aborted'
 }
 
@@ -155,10 +194,9 @@ function test_test_attempts() {
   expect_log 'attempt.*2$'
   expect_log 'attempt.*3$'
   expect_log_once '^test_summary '
-  expect_log_once 'status.*FAILED'
+  expect_log 'status.*FAILED'
   expect_not_log 'status.*PASSED'
   expect_not_log 'status.*FLAKY'
-  expect_log_once '^progress '
   expect_not_log 'aborted'
   expect_log '^test_result'
   expect_log 'test_action_output'
@@ -176,9 +214,23 @@ function test_test_runtime() {
   expect_log '^test_result'
   expect_log 'test_attempt_duration_millis.*[1-9]'
   expect_log 'build_finished'
-  expect_log 'overall_success: true'
+  expect_log 'SUCCESS'
   expect_log 'finish_time'
   expect_not_log 'aborted'
+}
+
+function test_test_start_times() {
+  # Verify that the start time of a test is reported, regardless whether
+  # it was cached or not.
+  bazel clean --expunge
+  bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
+    || fail "bazel test failed"
+  expect_log 'test_attempt_start_millis_epoch.*[1-9]'
+  expect_not_log 'cached_locally'
+  bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
+    || fail "bazel test failed"
+  expect_log 'test_attempt_start_millis_epoch.*[1-9]'
+  expect_log 'cached_locally.*true'
 }
 
 function test_test_attempts_multi_runs() {
@@ -190,7 +242,6 @@ function test_test_attempts_multi_runs() {
     && fail "test failure expected" ) || true
   expect_log 'run.*1'
   expect_log 'attempt.*2'
-  expect_log_once '^progress '
   expect_not_log 'aborted'
 }
 
@@ -203,7 +254,6 @@ function test_test_attempts_multi_runs_flake_detection() {
     && fail "test failure expected" ) || true
   expect_log 'run.*1'
   expect_log 'attempt.*2'
-  expect_log_once '^progress '
   expect_not_log 'aborted'
 }
 
@@ -216,14 +266,14 @@ function test_cached_test_results() {
   expect_log '^test_result'
   expect_log 'name:.*test.log'
   expect_log 'name:.*test.xml'
-  expect_log_once '^progress '
+  expect_not_log 'cached_locally'
   expect_not_log 'aborted'
   bazel test --experimental_build_event_text_file=$TEST_log pkg:true \
     || fail "Second testing of pkg:true failed"
   expect_log '^test_result'
   expect_log 'name:.*test.log'
   expect_log 'name:.*test.xml'
-  expect_log_once '^progress '
+  expect_log 'cached_locally'
   expect_not_log 'aborted'
 }
 
@@ -234,6 +284,18 @@ function test_target_complete() {
   expect_log 'out1.txt'
   expect_log 'tag1'
   expect_log 'tag2'
+}
+
+function test_extra_action() {
+  # verify that normal successful actions are not reported, but extra actions
+  # are
+  bazel build --experimental_build_event_text_file=$TEST_log \
+    pkg:output_files_and_tags || fail "bazel build failed"
+  expect_not_log '^action'
+  bazel build --experimental_build_event_text_file=$TEST_log \
+    --experimental_action_listener=pkg:listener \
+    pkg:output_files_and_tags || fail "bazel build with listener failed"
+  expect_log '^action'
 }
 
 function test_aspect_artifacts() {
@@ -255,19 +317,10 @@ function test_build_only() {
     || fail "bazel build failed"
   expect_not_log 'aborted'
   expect_not_log 'test_summary '
-  expect_log_once '^progress'
   # Build Finished
   expect_log 'build_finished'
-  expect_log 'overall_success: true'
   expect_log 'finish_time'
-}
-
-function test_build_test_suite() {
-  # Sucessfully building a test suite should not have any unexpected events;
-  # so we expect to see only one progress event.
-  bazel build --experimental_build_event_text_file=$TEST_log pkg:suite \
-    || fail "bazel build failed"
-  expect_log_once '^progress'
+  expect_log 'SUCCESS'
 }
 
 function test_multiple_transports() {
@@ -317,5 +370,18 @@ function test_loading_failure_keep_going() {
   expect_log 'details.*BUILD file not found on package path'
   expect_not_log 'aborted'
 }
+
+# TODO(aehlig): readd, once we stop reporting the important artifacts
+#               for every target completion
+#
+# function test_artifact_dedup() {
+#   bazel build --experimental_build_event_text_file=$TEST_log \
+#       pkg:innergroup pkg:outergroup \
+#   || fail "bazel build failed"
+#   expect_log_once "name.*sourcefileA"
+#   expect_log_once "name.*sourcefileB"
+#   expect_log_once "name.*sourcefileC"
+#   expect_not_log 'aborted'
+# }
 
 run_suite "Integration tests for the build event stream"

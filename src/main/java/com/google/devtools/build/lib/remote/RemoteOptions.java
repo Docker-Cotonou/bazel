@@ -34,10 +34,10 @@ public final class RemoteOptions extends OptionsBase {
   public String restCacheUrl;
 
   @Option(
-          name = "remote_cache_debug",
-          defaultValue = "false",
-          category = "remote",
-          help = "Print remote caching debugging"
+    name = "remote_cache_debug",
+    defaultValue = "false",
+    category = "remote",
+    help = "Print remote caching debugging"
   )
   public boolean remoteCacheDebug;
 
@@ -49,11 +49,24 @@ public final class RemoteOptions extends OptionsBase {
   )
   public String s3CacheBucket;
 
+  @Option(name = "remote_fallback_strategy",
+    allowMultiple = true,
+    converter = AssignmentConverter.class,
+    defaultValue = "",
+    category = "strategy",
+    help =
+        "Fallback strategy if 'remote' can't be used. Allowed values are "
+            + "'worker' and 'standalone'. Example: 'TsCompile=worker' means that "
+            + "when compiling TypeScript, if 'remote' strategy can't be used then "
+            + "'worker' strategy should be used. '*=worker' means to fall back to "
+            + "worker for all action types.")
+  public List<Map.Entry<String, String>> remoteFallbackStrategy;
+
   @Option(
     name = "hazelcast_node",
     defaultValue = "null",
     category = "remote",
-    help = "A comma separated list of hostnames of hazelcast nodes. For client mode only."
+    help = "A comma separated list of hostnames of hazelcast nodes."
   )
   public String hazelcastNode;
 
@@ -61,7 +74,7 @@ public final class RemoteOptions extends OptionsBase {
     name = "hazelcast_client_config",
     defaultValue = "null",
     category = "remote",
-    help = "A file path to a hazelcast client config XML file. For client mode only."
+    help = "A file path to a hazelcast client config XML file."
   )
   public String hazelcastClientConfig;
 
@@ -79,9 +92,7 @@ public final class RemoteOptions extends OptionsBase {
     name = "remote_worker",
     defaultValue = "null",
     category = "remote",
-    help =
-        "Hostname and port number of remote worker in the form of host:port. "
-            + "For client mode only."
+    help = "Hostname and port number of remote worker in the form of host:port. "
   )
   public String remoteWorker;
 
@@ -89,17 +100,15 @@ public final class RemoteOptions extends OptionsBase {
     name = "remote_cache",
     defaultValue = "null",
     category = "remote",
-    help =
-        "Hostname and port number of remote gRPC cache in the form of host:port. "
-            + "For client mode only."
+    help = "Hostname and port number of remote gRPC cache in the form of host:port. "
   )
   public String remoteCache;
 
   @Option(
     name = "grpc_max_chunk_size_bytes",
-    defaultValue = "400000", // <4MB. Bounded by the gRPC size limit on the overall message.
+    defaultValue = "16000",
     category = "remote",
-    help = "The maximal number of bytes to be sent in a single message. For client mode only."
+    help = "The maximal number of data bytes to be sent in a single message."
   )
   public int grpcMaxChunkSizeBytes;
 
@@ -107,7 +116,7 @@ public final class RemoteOptions extends OptionsBase {
     name = "grpc_max_batch_inputs",
     defaultValue = "100",
     category = "remote",
-    help = "The maximal number of input file to be sent in a single batch. For client mode only."
+    help = "The maximal number of input files to be sent in a single batch."
   )
   public int grpcMaxBatchInputs;
 
@@ -115,7 +124,7 @@ public final class RemoteOptions extends OptionsBase {
     name = "grpc_max_batch_size_bytes",
     defaultValue = "10485760", // 10MB
     category = "remote",
-    help = "The maximal number of input bytes to be sent in a single batch. For client mode only."
+    help = "The maximal number of input bytes to be sent in a single batch."
   )
   public int grpcMaxBatchSizeBytes;
 
@@ -123,7 +132,7 @@ public final class RemoteOptions extends OptionsBase {
     name = "grpc_timeout_seconds",
     defaultValue = "60",
     category = "remote",
-    help = "The maximal number of seconds to wait for remote calls. For client mode only."
+    help = "The maximal number of seconds to wait for remote calls."
   )
   public int grpcTimeoutSeconds;
 
@@ -159,15 +168,55 @@ public final class RemoteOptions extends OptionsBase {
   )
   public String experimentalRemotePlatformOverride;
 
-  @Option(name = "remote_fallback_strategy",
-      allowMultiple = true,
-      converter = AssignmentConverter.class,
-      defaultValue = "",
-      category = "strategy",
-      help = "Fallback strategy if 'remote' can't be used. Allowed values are "
-          + "'worker' and 'standalone'. Example: 'TsCompile=worker' means that "
-          + "when compiling TypeScript, if 'remote' strategy can't be used then "
-          + "'worker' strategy should be used. '*=worker' means to fall back to "
-          + "worker for all action types.")
-  public List<Map.Entry<String, String>> remoteFallbackStrategy;
+  @Option(
+    name = "auth_enabled",
+    defaultValue = "false",
+    category = "remote",
+    help = "Whether to enable API key authentication."
+  )
+  public boolean authEnabled;
+
+  @Option(
+    name = "auth_scope",
+    defaultValue = "null",
+    category = "remote",
+    help = "If server authentication requires a scope, provide it here."
+  )
+  public String authScope;
+
+  @Option(
+    name = "auth_credentials_json",
+    defaultValue = "null",
+    category = "remote",
+    help = "Location of credentials JSON file."
+  )
+  public String authCredentialsJson;
+
+  @Option(
+    name = "tls_enabled",
+    defaultValue = "false",
+    category = "remote",
+    help =
+        "If set to true, Bazel uses TLS encryption for all connections to remote cache and "
+            + "execution servers."
+  )
+  public boolean tlsEnabled;
+
+  @Option(
+    name = "tls_cert",
+    defaultValue = "null",
+    category = "remote",
+    help = "TLS certificate file to use."
+  )
+  public String tlsCert;
+
+  @Option(
+    name = "tls_authority_override",
+    defaultValue = "null",
+    category = "remote",
+    help =
+        "If present, consider the value of the flag a valid TLS authority. This is useful for "
+            + "using self-signed test TLS certificates. For testing only."
+  )
+  public String tlsAuthorityOverride;
 }

@@ -22,10 +22,14 @@
 
 : ${BAZELRC:="/dev/null"}
 : ${EMBED_LABEL:=""}
+: ${SOURCE_DATE_EPOCH:=""}
 
 EMBED_LABEL_ARG=()
 if [ -n "${EMBED_LABEL}" ]; then
     EMBED_LABEL_ARG=(--stamp --embed_label "${EMBED_LABEL}")
+    if [ -n "${SOURCE_DATE_EPOCH}" ]; then
+        EMBED_LABEL_ARG+=(--experimental_embed_timestamp_epoch "${SOURCE_DATE_EPOCH}")
+    fi
 fi
 
 : ${JAVA_VERSION:="1.8"}
@@ -58,7 +62,8 @@ if [ -z "${BAZEL-}" ]; then
         --javacopt="-g -source ${JAVA_VERSION} -target ${JAVA_VERSION}" "${@}"
   }
 else
-  function _run_bootstrapping_bazel() { local command=$1
+  function _run_bootstrapping_bazel() {
+    local command=$1
     shift
     ${BAZEL} --bazelrc=${BAZELRC} ${BAZEL_DIR_STARTUP_OPTIONS} $command \
         ${_BAZEL_ARGS} --verbose_failures \

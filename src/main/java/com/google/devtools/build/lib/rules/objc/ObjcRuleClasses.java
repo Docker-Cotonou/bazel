@@ -23,7 +23,6 @@ import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 import static com.google.devtools.build.lib.syntax.Type.STRING;
 import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -56,6 +55,7 @@ import com.google.devtools.build.lib.rules.apple.AppleToolchain.RequiresXcodeCon
 import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.apple.Platform.PlatformType;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
+import com.google.devtools.build.lib.rules.cpp.CppModuleMap.UmbrellaHeaderStrategy;
 import com.google.devtools.build.lib.rules.proto.ProtoSourceFileBlacklist;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
@@ -118,9 +118,14 @@ public class ObjcRuleClasses {
     // We need to append "_j2objc" to the name of the generated archive file to distinguish it from
     // the C/C++ archive file created by proto_library targets with attribute cc_api_version
     // specified.
+    // Generate an umbrella header for the module map. The headers declared in module maps are
+    // compiled using the #import directives which are incompatible with J2ObjC segmented headers.
+    // We need to #iclude all the headers in an umbrella header and then declare the umbrella header
+    // in the module map.
     return new IntermediateArtifacts(
         ruleContext,
-        /*archiveFileNameSuffix=*/"_j2objc");
+        /*archiveFileNameSuffix=*/"_j2objc",
+        UmbrellaHeaderStrategy.GENERATE);
   }
 
   public static Artifact artifactByAppendingToBaseName(RuleContext context, String suffix) {
@@ -138,10 +143,6 @@ public class ObjcRuleClasses {
   public static boolean isInstrumentable(Artifact sourceArtifact) {
     return !ASSEMBLY_SOURCES.matches(sourceArtifact.getFilename());
   }
-
-  @VisibleForTesting
-  static final Iterable<SdkFramework> AUTOMATIC_SDK_FRAMEWORKS = ImmutableList.of(
-      new SdkFramework("Foundation"), new SdkFramework("UIKit"));
 
   /**
    * Label of a filegroup that contains all crosstool and grte files for all configurations,
@@ -647,10 +648,8 @@ public class ObjcRuleClasses {
      * Rule class names for cc rules which are allowed as targets of the 'deps' attribute of this
      * rule.
      */
-    static final Iterable<String> ALLOWED_CC_DEPS_RULE_CLASSES =
-        ImmutableSet.of(
-            "cc_library",
-            "cc_inc_library"); 
+    static final ImmutableSet<String> ALLOWED_CC_DEPS_RULE_CLASSES =
+        ImmutableSet.of("cc_library", "cc_inc_library");
     /**
      * Rule class names which are allowed as targets of the 'deps' attribute of this rule.
      */
@@ -922,6 +921,11 @@ public class ObjcRuleClasses {
      * Attribute name for apple platform type (e.g. ios or watchos).
      */
     static final String PLATFORM_TYPE_ATTR_NAME = "platform_type";
+    
+    /**
+     * Attribute name for the minimum OS version (e.g. "7.3").
+     */
+    static final String MINIMUM_OS_VERSION = "minimum_os_version";
 
     @Override
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
@@ -936,8 +940,11 @@ public class ObjcRuleClasses {
               .value(ObjcRuleClasses.APPLE_TOOLCHAIN))
           /* <!-- #BLAZE_RULE($apple_multiarch_rule).ATTRIBUTE(platform_type) -->
           The type of platform for which to create artifacts in this rule.
-          For example, if <code>ios</code> is selected, then the output binaries/libraries will
-          be created combining all architectures specified in <code>--ios_multi_cpus</code>.
+
+          This dictates which Apple platform SDK is used for compilation/linking and which flag is
+          used to determine the architectures for which to build. For example, if <code>ios</code>
+          is selected, then the output binaries/libraries will be created combining all
+          architectures specified in <code>--ios_multi_cpus</code>.
 
           Options are:
           <ul>
@@ -945,13 +952,29 @@ public class ObjcRuleClasses {
               <code>ios</code> (default): architectures gathered from <code>--ios_multi_cpus</code>.
             </li>
             <li>
-              <code>watchos</code>: architectures gathered from <code>--watchos_multi_cpus</code>
+              <code>macos</code>: architectures gathered from <code>--macos_cpus</code>.
+            </li>
+            <li>
+              <code>tvos</code>: architectures gathered from <code>--tvos_cpus</code>.
+            </li>
+            <li>
+              <code>watchos</code>: architectures gathered from <code>--watchos_cpus</code>.
             </li>
           </ul>
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
+          // TODO(b/37635370): Remove the "ios" default and make this mandatory.
           .add(attr(PLATFORM_TYPE_ATTR_NAME, STRING)
               .value(PlatformType.IOS.toString())
               .nonconfigurable("Determines the configuration transition on deps"))
+          /* <!-- #BLAZE_RULE($apple_multiarch_rule).ATTRIBUTE(minimum_os) -->
+          The minimum OS version that this target and its dependencies should be built for.
+
+          This should be a dotted version string such as "7.3". 
+          <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
+          // TODO(b/37096178): This should be a mandatory attribute.
+          .add(
+              attr(MINIMUM_OS_VERSION, STRING)
+                  .nonconfigurable("Determines the configuration transition on deps"))
           .build();
     }
 

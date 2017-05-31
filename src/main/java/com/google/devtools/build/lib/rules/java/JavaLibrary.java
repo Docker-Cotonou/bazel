@@ -92,8 +92,7 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
     Artifact classJar = ruleContext.getImplicitOutputArtifact(
         JavaSemantics.JAVA_LIBRARY_CLASS_JAR);
 
-    if (attributes.hasSourceFiles() || attributes.hasSourceJars() || attributes.hasResources()
-        || attributes.hasMessages()) {
+    if (attributes.hasSources() || attributes.hasResources()) {
       // We only want to add a jar to the classpath of a dependent rule if it has content.
       javaArtifactsBuilder.addRuntimeJar(classJar);
       jar = classJar;
@@ -120,7 +119,7 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
     helper.createSourceJarAction(srcJar, genSourceJar);
 
     Artifact iJar = null;
-    if ((attributes.hasSourceFiles() || attributes.hasSourceJars()) && jar != null) {
+    if (attributes.hasSources() && jar != null) {
       iJar = helper.createCompileTimeJarAction(jar, javaArtifactsBuilder);
     }
 
@@ -200,6 +199,8 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
         .addProvider(JavaCompilationArgsProvider.class, compilationArgsProvider)
         .addProvider(JavaSourceJarsProvider.class, sourceJarsProvider)
         .addProvider(ProtoJavaApiInfoAspectProvider.class, protoAspectBuilder.build())
+        .addProvider(JavaRuleOutputJarsProvider.class, ruleOutputJarsProvider)
+        // java_library doesn't need to return JavaRunfilesProvider
         .build();
     builder
         .addSkylarkTransitiveInfo(JavaSkylarkApiProvider.NAME, skylarkApiProvider.build())
@@ -225,7 +226,6 @@ public class JavaLibrary implements RuleConfiguredTargetFactory {
         .add(
             JavaSourceInfoProvider.class,
             JavaSourceInfoProvider.fromJavaTargetAttributes(attributes, semantics))
-        .add(JavaSourceJarsProvider.class, sourceJarsProvider)
         // TODO(bazel-team): this should only happen for java_plugin
         .add(JavaPluginInfoProvider.class, JavaCommon.getTransitivePlugins(ruleContext))
         .add(ProguardSpecProvider.class, new ProguardSpecProvider(proguardSpecs))

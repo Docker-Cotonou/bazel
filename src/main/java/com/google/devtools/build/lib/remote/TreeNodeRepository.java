@@ -23,14 +23,18 @@ import com.google.common.collect.Interner;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.TreeTraverser;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ActionInputFileCache;
+import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
+import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.FileNode;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -38,6 +42,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SortedMap;
 import java.util.TreeMap;
 import javax.annotation.Nullable;
 
@@ -176,14 +181,20 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
   // Merkle hashes are computed and cached by the repository, therefore execRoot must
   // be part of the state.
   private final Path execRoot;
-  private final Map<ActionInput, ContentDigest> fileContentsDigestCache = new HashMap<>();
-  private final Map<ContentDigest, ActionInput> digestFileContentsCache = new HashMap<>();
+  private final ActionInputFileCache inputFileCache;
   private final Map<TreeNode, ContentDigest> treeNodeDigestCache = new HashMap<>();
   private final Map<ContentDigest, TreeNode> digestTreeNodeCache = new HashMap<>();
   private final Map<TreeNode, FileNode> fileNodeCache = new HashMap<>();
+  private final Map<VirtualActionInput, ContentDigest> virtualInputDigestCache = new HashMap<>();
+  private final Map<ContentDigest, VirtualActionInput> digestVirtualInputCache = new HashMap<>();
 
-  public TreeNodeRepository(Path execRoot) {
+  public TreeNodeRepository(Path execRoot, ActionInputFileCache inputFileCache) {
     this.execRoot = execRoot;
+    this.inputFileCache = inputFileCache;
+  }
+
+  public ActionInputFileCache getInputFileCache() {
+    return inputFileCache;
   }
 
   @Override
@@ -217,27 +228,38 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
         });
   }
 
+  public TreeNode buildFromActionInputs(Iterable<? extends ActionInput> inputs) {
+    TreeMap<PathFragment, ActionInput> sortedMap = new TreeMap<>();
+    for (ActionInput input : inputs) {
+      sortedMap.put(PathFragment.create(input.getExecPathString()), input);
+    }
+    return buildFromActionInputs(sortedMap);
+  }
+
   /**
    * This function is a temporary and highly inefficient hack! It builds the tree from a ready list
    * of input files. TODO(olaola): switch to creating and maintaining the TreeNodeRepository based
    * on the build graph structure.
    */
-  public TreeNode buildFromActionInputs(Iterable<ActionInput> actionInputs) {
-    TreeMap<PathFragment, ActionInput> sortedMap = new TreeMap<>();
-    for (ActionInput input : actionInputs) {
-      sortedMap.put(new PathFragment(input.getExecPathString()), input);
-    }
+  public TreeNode buildFromActionInputs(SortedMap<PathFragment, ActionInput> sortedMap) {
     ImmutableList.Builder<ImmutableList<String>> segments = ImmutableList.builder();
     for (PathFragment path : sortedMap.keySet()) {
       segments.add(path.getSegments());
     }
-    ImmutableList<ActionInput> inputs = ImmutableList.copyOf(sortedMap.values());
+    List<ActionInput> inputs = new ArrayList<>();
+    for (Map.Entry<PathFragment, ActionInput> e : sortedMap.entrySet()) {
+      if (e.getValue() == SpawnInputExpander.EMPTY_FILE) {
+        inputs.add(new EmptyActionInput(e.getKey()));
+      } else {
+        inputs.add(e.getValue());
+      }
+    }
     return buildParentNode(inputs, segments.build(), 0, inputs.size(), 0);
   }
 
   @SuppressWarnings("ReferenceEquality") // Segments are interned.
   private TreeNode buildParentNode(
-      ImmutableList<ActionInput> inputs,
+      List<ActionInput> inputs,
       ImmutableList<ImmutableList<String>> segments,
       int inputsStart,
       int inputsEnd,
@@ -267,29 +289,29 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
     return interner.intern(new TreeNode(entries));
   }
 
-  private synchronized ContentDigest getOrComputeActionInputDigest(ActionInput actionInput)
-      throws IOException {
-    ContentDigest digest = fileContentsDigestCache.get(actionInput);
-    if (digest == null) {
-      digest = ContentDigests.computeDigest(execRoot.getRelative(actionInput.getExecPathString()));
-      fileContentsDigestCache.put(actionInput, digest);
-      digestFileContentsCache.put(digest, actionInput);
-    }
-    return digest;
-  }
-
   private synchronized FileNode getOrComputeFileNode(TreeNode node) throws IOException {
     // Assumes all child digests have already been computed!
     FileNode fileNode = fileNodeCache.get(node);
     if (fileNode == null) {
       FileNode.Builder b = FileNode.newBuilder();
       if (node.isLeaf()) {
-        ContentDigest fileDigest = fileContentsDigestCache.get(node.getActionInput());
-        Preconditions.checkState(fileDigest != null);
-        b.getFileMetadataBuilder()
-            .setDigest(fileDigest)
-            .setExecutable(
-                execRoot.getRelative(node.getActionInput().getExecPathString()).isExecutable());
+        ActionInput input = node.getActionInput();
+        if (input instanceof VirtualActionInput) {
+          VirtualActionInput virtualInput = (VirtualActionInput) input;
+          ContentDigest digest = ContentDigests.computeDigest(virtualInput);
+          virtualInputDigestCache.put(virtualInput, digest);
+          // There may be multiple inputs with the same digest. In that case, we don't care which
+          // one we get back from the digestVirtualInputCache later.
+          digestVirtualInputCache.put(digest, virtualInput);
+          b.getFileMetadataBuilder()
+              .setDigest(digest)
+              // We always declare virtual action inputs as non-executable for now.
+              .setExecutable(false);
+        } else {
+          b.getFileMetadataBuilder()
+              .setDigest(ContentDigests.getDigestFromInputCache(input, inputFileCache))
+              .setExecutable(execRoot.getRelative(input.getExecPathString()).isExecutable());
+        }
       } else {
         for (TreeNode.ChildEntry entry : node.getChildEntries()) {
           ContentDigest childDigest = treeNodeDigestCache.get(entry.getChild());
@@ -316,7 +338,10 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
       }
     }
     if (root.isLeaf()) {
-      getOrComputeActionInputDigest(root.getActionInput());
+      ActionInput input = root.getActionInput();
+      if (!(input instanceof VirtualActionInput)) {
+        inputFileCache.getDigest(input);
+      }
     } else {
       for (TreeNode child : children(root)) {
         computeMerkleDigests(child);
@@ -337,15 +362,22 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
    * Returns the precomputed digests for both data and metadata. Should only be used after
    * computeMerkleDigests has been called on one of the node ancestors.
    */
-  public ImmutableCollection<ContentDigest> getAllDigests(TreeNode root) {
+  public ImmutableCollection<ContentDigest> getAllDigests(TreeNode root) throws IOException {
     ImmutableSet.Builder<ContentDigest> digests = ImmutableSet.builder();
     for (TreeNode node : descendants(root)) {
       digests.add(Preconditions.checkNotNull(treeNodeDigestCache.get(node)));
       if (node.isLeaf()) {
-        digests.add(Preconditions.checkNotNull(fileContentsDigestCache.get(node.getActionInput())));
+        digests.add(actionInputToDigest(node.getActionInput()));
       }
     }
     return digests.build();
+  }
+
+  private ContentDigest actionInputToDigest(ActionInput input) throws IOException {
+    if (input instanceof VirtualActionInput) {
+      return Preconditions.checkNotNull(virtualInputDigestCache.get(input));
+    }
+    return ContentDigests.getDigestFromInputCache(input, inputFileCache);
   }
 
   /**
@@ -355,7 +387,7 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
    */
   // Note: this is not, strictly speaking, thread safe. If someone is deleting cached Merkle hashes
   // while this is executing, it will trigger an exception. But I think this is WAI.
-  public ImmutableList<FileNode> treeToFileNodes(TreeNode root) throws IOException {
+  public ImmutableList<FileNode> treeToFileNodes(TreeNode root) {
     ImmutableList.Builder<FileNode> fileNodes = ImmutableList.builder();
     for (TreeNode node : descendants(root)) {
       fileNodes.add(Preconditions.checkNotNull(fileNodeCache.get(node)));
@@ -373,8 +405,15 @@ public final class TreeNodeRepository extends TreeTraverser<TreeNodeRepository.T
       TreeNode treeNode = digestTreeNodeCache.get(digest);
       if (treeNode != null) {
         nodes.add(Preconditions.checkNotNull(fileNodeCache.get(treeNode)));
-      } else { // If not there, it must be an ActionInput.
-        actionInputs.add(Preconditions.checkNotNull(digestFileContentsCache.get(digest)));
+      } else {
+        // If not there, it must be an ActionInput.
+        ByteString hexDigest = ByteString.copyFromUtf8(ContentDigests.toHexString(digest));
+        ActionInput input = inputFileCache.getInputFromDigest(hexDigest);
+        if (input == null) {
+          // ... or a VirtualActionInput.
+          input = digestVirtualInputCache.get(digest);
+        }
+        actionInputs.add(Preconditions.checkNotNull(input));
       }
     }
   }

@@ -11,7 +11,7 @@ Here, you'll do the following:
 
 *   Install Bazel
 *   Install Android Studio and the Android SDK
-*   Install Xcode (OS X only)
+*   Install Xcode (macOS (OS X) only)
 *   Get the sample project from the GitHub repo
 
 ## Install Bazel
@@ -77,8 +77,8 @@ Enter the following at the command line to get the files in the `source-only`
 branch:
 
 ```bash
-$ cd $HOME
-$ git clone -b source-only https://github.com/bazelbuild/examples
+cd $HOME
+git clone -b source-only https://github.com/bazelbuild/examples
 ```
 
 The `git clone` command creates a directory named `$HOME/examples/`. This

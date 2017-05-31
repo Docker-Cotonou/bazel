@@ -23,7 +23,7 @@ The `WORKSPACE` file can be used to reference
 One workspace can be shared among multiple projects if desired.
 
 ```bash
-$ touch WORKSPACE
+touch WORKSPACE
 ```
 
 ## Creating a Build File
@@ -93,5 +93,5 @@ languages.
 
 # Next Steps
 
-Next, check out the tutorial on building [java](/docs/tutorial/java.html)
+Next, check out the tutorial on building [Java](/docs/tutorial/java.html)
 or [C++](/docs/tutorial/cpp.html) programs.

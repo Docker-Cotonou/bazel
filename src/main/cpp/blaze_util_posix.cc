@@ -126,6 +126,8 @@ string GetProcessIdAsString() {
   return ToString(getpid());
 }
 
+string GetHomeDir() { return GetEnv("HOME"); }
+
 string FindSystemWideBlazerc() {
   string path = "/etc/bazel.bazelrc";
   if (blaze_util::CanReadFile(path)) {
@@ -166,7 +168,7 @@ std::string ConvertPathList(const std::string& path_list) { return path_list; }
 
 std::string PathAsJvmFlag(const std::string& path) { return path; }
 
-std::string ListSeparator() { return ":"; }
+const char kListSeparator = ':';
 
 bool SymlinkDirectories(const string &target, const string &link) {
   return symlink(target.c_str(), link.c_str()) == 0;
@@ -341,18 +343,6 @@ string GetJvmVersion(const string& java_exe) {
 
   string version_string = RunProgram(java_exe, args);
   return ReadJvmVersion(version_string);
-}
-
-bool ReadDirectorySymlink(const string &name, string* result) {
-  char buf[PATH_MAX + 1];
-  int len = readlink(name.c_str(), buf, PATH_MAX);
-  if (len < 0) {
-    return false;
-  }
-
-  buf[len] = 0;
-  *result = buf;
-  return true;
 }
 
 bool CompareAbsolutePaths(const string& a, const string& b) {

@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.pkgcache.PackageCacheOptions;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
+import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Path;
@@ -56,6 +57,7 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
         .preparePackageLoading(
             new PathPackageLocator(outputBase, ImmutableList.of(rootDirectory, alternativeRoot)),
             packageCacheOptions,
+            Options.getDefaults(SkylarkSemanticsOptions.class),
             "",
             UUID.randomUUID(),
             ImmutableMap.<String, String>of(),
@@ -101,6 +103,7 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
         "    name = 'a_remote_repo',",
         "    path = '/a_remote_repo'",
         ")");
+    scratch.file("/a_remote_repo/WORKSPACE");
     scratch.file("/a_remote_repo/remote_pkg/BUILD");
     scratch.file("/a_remote_repo/remote_pkg/ext1.bzl",
         "load(':ext2.bzl', 'CONST')");
@@ -231,6 +234,7 @@ public class SkylarkImportLookupFunctionTest extends BuildViewTestCase {
         "    name = 'a_remote_repo',",
         "    path = '/a_remote_repo'",
         ")");
+    scratch.file("/a_remote_repo/WORKSPACE");
     scratch.file("/a_remote_repo/remote_pkg/BUILD");
     scratch.file("/a_remote_repo/remote_pkg/ext.bzl",
         "CONST = 17");

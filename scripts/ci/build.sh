@@ -142,7 +142,13 @@ function bazel_build() {
     # Copy the results to the output directory
     mkdir -p $1/packages
     cp bazel-bin/src/bazel $1/bazel
-    cp bazel-bin/scripts/packages/install.sh $1/bazel-${release_label}-installer.sh
+    # The version with a bundled JDK may not exist on all platforms.
+    if [ "${JAVA_VERSION}" = "1.8" -a -e "bazel-bin/scripts/packages/with-jdk/install.sh" ]; then
+      cp bazel-bin/scripts/packages/with-jdk/install.sh $1/bazel-${release_label}-installer.sh
+      cp bazel-bin/scripts/packages/without-jdk/install.sh $1/bazel-${release_label}-without-jdk-installer.sh
+    else
+      cp bazel-bin/scripts/packages/without-jdk/install.sh $1/bazel-${release_label}-installer.sh
+    fi
     if [ "$PLATFORM" = "linux" ]; then
       cp bazel-bin/scripts/packages/debian/bazel-debian.deb $1/bazel_${release_label}.deb
       cp -f bazel-genfiles/scripts/packages/debian/bazel.dsc $1/bazel.dsc
@@ -216,6 +222,13 @@ function release_to_github() {
 _Notice_: Bazel installers contain binaries licensed under the GPLv2 with
 Classpath exception. Those installers should always be redistributed along with
 the source code.
+
+Some versions of Bazel contain a bundled version of OpenJDK. The license of the
+bundled OpenJDK and other open-source components can be displayed by running
+the command `bazel license`. The vendor and version information of the bundled
+OpenJDK can be displayed by running the command `bazel info java-runtime`.
+The binaries and source-code of the bundled OpenJDK can be
+[downloaded from our mirror server](https://bazel-mirror.storage.googleapis.com/openjdk/index.html).
 
 _Security_: All our binaries are signed with our
 [public key](https://bazel.build/bazel-release.pub.gpg) 48457EE0.
@@ -293,16 +306,20 @@ function release_to_gcs() {
     echo "Please set GCS_BUCKET to the name of your Google Cloud Storage bucket." >&2
     return 1
   fi
-  if [ -n "${release_name}" ] && [ -n "${rc}" ]; then
+  if [ -n "${release_name}" ]; then
+    local release_path="${release_name}/release"
+    if [ -n "${rc}" ]; then
+      release_path="${release_name}/rc${rc}"
+    fi
     # Make a temporary folder with the desired structure
     local dir="$(mktemp -d ${TMPDIR:-/tmp}/tmp.XXXXXXXX)"
     local prev_dir="$PWD"
     trap "{ cd ${prev_dir}; rm -fr ${dir}; }" EXIT
-    mkdir -p "${dir}/${release_name}/rc${rc}"
-    cp "${@}" "${dir}/${release_name}/rc${rc}"
+    mkdir -p "${dir}/${release_path}"
+    cp "${@}" "${dir}/${release_path}"
     # Add a index.html file:
-    create_index_html "${dir}/${release_name}/rc${rc}" \
-        >"${dir}/${release_name}/rc${rc}"/index.html
+    create_index_html "${dir}/${release_path}" \
+        >"${dir}/${release_path}"/index.html
     cd ${dir}
     "${gs}" -m cp -a public-read -r . "gs://${GCS_BUCKET}"
     cd "${prev_dir}"

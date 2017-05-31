@@ -35,6 +35,7 @@ import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.NON_ARC_S
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.PRECOMPILED_SRCS_TYPE;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.SRCS_TYPE;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicates;
@@ -43,12 +44,12 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
+import com.google.devtools.build.lib.analysis.OutputGroupProvider;
 import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
-import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnActionTemplate;
 import com.google.devtools.build.lib.analysis.actions.SpawnActionTemplate.OutputPathMapper;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
@@ -66,10 +67,12 @@ import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction.DotdFile;
 import com.google.devtools.build.lib.rules.cpp.CppModuleMap;
 import com.google.devtools.build.lib.rules.cpp.FdoSupportProvider;
-import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
@@ -79,6 +82,13 @@ import javax.annotation.Nullable;
  * TODO(b/28403953): Deprecate in favor of {@link CrosstoolCompilationSupport} in all objc rules.
  */
 public class LegacyCompilationSupport extends CompilationSupport {
+
+  /**
+   * Frameworks implicitly linked to iOS, watchOS, and tvOS binaries when using legacy compilation.
+   */
+  @VisibleForTesting
+  static final ImmutableList<SdkFramework> AUTOMATIC_SDK_FRAMEWORKS =
+      ImmutableList.of(new SdkFramework("Foundation"), new SdkFramework("UIKit"));
 
   /**
    * A mapper that maps input ObjC source {@link Artifact.TreeFileArtifact}s to output object file
@@ -135,8 +145,16 @@ public class LegacyCompilationSupport extends CompilationSupport {
       RuleContext ruleContext,
       BuildConfiguration buildConfiguration,
       IntermediateArtifacts intermediateArtifacts,
-      CompilationAttributes compilationAttributes) {
-    super(ruleContext, buildConfiguration, intermediateArtifacts, compilationAttributes);
+      CompilationAttributes compilationAttributes,
+      boolean useDeps,
+      Map<String, NestedSet<Artifact>> outputGroupCollector) {
+    super(
+        ruleContext,
+        buildConfiguration,
+        intermediateArtifacts,
+        compilationAttributes,
+        useDeps,
+        outputGroupCollector);
   }
 
   @Override
@@ -170,12 +188,12 @@ public class LegacyCompilationSupport extends CompilationSupport {
       ExtraCompileArgs extraCompileArgs,
       Iterable<PathFragment> priorityHeaders,
       Optional<CppModuleMap> moduleMap) {
-    ImmutableList.Builder<Artifact> objFiles = ImmutableList.builder();
+    ImmutableList.Builder<Artifact> objFilesBuilder = ImmutableList.builder();
     ImmutableList.Builder<ObjcHeaderThinningInfo> objcHeaderThinningInfos = ImmutableList.builder();
 
     for (Artifact sourceFile : compilationArtifacts.getSrcs()) {
       Artifact objFile = intermediateArtifacts.objFile(sourceFile);
-      objFiles.add(objFile);
+      objFilesBuilder.add(objFile);
 
       if (objFile.isTreeArtifact()) {
         registerCompileActionTemplate(
@@ -203,7 +221,7 @@ public class LegacyCompilationSupport extends CompilationSupport {
     }
     for (Artifact nonArcSourceFile : compilationArtifacts.getNonArcSrcs()) {
       Artifact objFile = intermediateArtifacts.objFile(nonArcSourceFile);
-      objFiles.add(objFile);
+      objFilesBuilder.add(objFile);
       if (objFile.isTreeArtifact()) {
         registerCompileActionTemplate(
             nonArcSourceFile,
@@ -229,10 +247,15 @@ public class LegacyCompilationSupport extends CompilationSupport {
       }
     }
 
-    objFiles.addAll(compilationArtifacts.getPrecompiledSrcs());
+    objFilesBuilder.addAll(compilationArtifacts.getPrecompiledSrcs());
+
+    ImmutableList<Artifact> objFiles = objFilesBuilder.build();
+    outputGroupCollector.put(
+        OutputGroupProvider.FILES_TO_COMPILE,
+        NestedSetBuilder.<Artifact>stableOrder().addAll(objFiles).build());
 
     for (Artifact archive : compilationArtifacts.getArchive().asSet()) {
-      registerArchiveActions(objFiles.build(), archive);
+      registerArchiveActions(objFiles, archive);
     }
 
     registerHeaderScanningActions(
@@ -538,7 +561,8 @@ public class LegacyCompilationSupport extends CompilationSupport {
       J2ObjcEntryClassProvider j2ObjcEntryClassProvider,
       ExtraLinkArgs extraLinkArgs,
       Iterable<Artifact> extraLinkInputs,
-      DsymOutputType dsymOutputType) {
+      DsymOutputType dsymOutputType,
+      CcToolchainProvider toolchain) {
     Optional<Artifact> dsymBundleZip;
     Optional<Artifact> linkmap;
     Optional<Artifact> bitcodeSymbolMap;
@@ -633,6 +657,14 @@ public class LegacyCompilationSupport extends CompilationSupport {
     }
   }
 
+  @Override
+  protected Set<String> frameworkNames(ObjcProvider objcProvider) {
+    Set<String> names = new LinkedHashSet<>();
+    Iterables.addAll(names, SdkFramework.names(AUTOMATIC_SDK_FRAMEWORKS));
+    names.addAll(super.frameworkNames(objcProvider));
+    return names;
+  }
+
   private CommandLine linkCommandLine(
       ExtraLinkArgs extraLinkArgs,
       ObjcProvider objcProvider,
@@ -658,6 +690,8 @@ public class LegacyCompilationSupport extends CompilationSupport {
     // Do not perform code stripping on tests because XCTest binary is linked not as an executable
     // but as a bundle without any entry point.
     boolean isTestTarget = TargetUtils.isTestRule(ruleContext.getRule());
+    // TODO(b/36562173): Replace the "!isTestTarget" condition with the presence of "-bundle" in
+    // the command line.
     if (objcConfiguration.shouldStripBinary() && !isTestTarget) {
       commandLine.add("-dead_strip").add("-no_dead_strip_inits_and_terms");
     }
@@ -779,57 +813,6 @@ public class LegacyCompilationSupport extends CompilationSupport {
     public Iterable<String> arguments() {
       return ImmutableList.of(Joiner.on(' ').join(original.arguments()));
     }
-  }
-
-  private CompilationSupport registerDsymActions(DsymOutputType dsymOutputType) {
-    Artifact tempDsymBundleZip = intermediateArtifacts.tempDsymBundleZip(dsymOutputType);
-    Artifact linkedBinary =
-        objcConfiguration.shouldStripBinary()
-            ? intermediateArtifacts.unstrippedSingleArchitectureBinary()
-            : intermediateArtifacts.strippedSingleArchitectureBinary();
-    Artifact debugSymbolFile = intermediateArtifacts.dsymSymbol(dsymOutputType);
-    Artifact dsymPlist = intermediateArtifacts.dsymPlist(dsymOutputType);
-
-    PathFragment dsymOutputDir = removeSuffix(tempDsymBundleZip.getExecPath(), ".temp.zip");
-    PathFragment dsymPlistZipEntry = dsymPlist.getExecPath().relativeTo(dsymOutputDir);
-    PathFragment debugSymbolFileZipEntry =
-        debugSymbolFile
-            .getExecPath()
-            .replaceName(linkedBinary.getFilename())
-            .relativeTo(dsymOutputDir);
-
-    StringBuilder unzipDsymCommand =
-        new StringBuilder()
-            .append(
-                String.format(
-                    "unzip -p %s %s > %s",
-                    tempDsymBundleZip.getExecPathString(),
-                    dsymPlistZipEntry,
-                    dsymPlist.getExecPathString()))
-            .append(
-                String.format(
-                    " && unzip -p %s %s > %s",
-                    tempDsymBundleZip.getExecPathString(),
-                    debugSymbolFileZipEntry,
-                    debugSymbolFile.getExecPathString()));
-
-    ruleContext.registerAction(
-        new SpawnAction.Builder()
-            .setMnemonic("UnzipDsym")
-            .setShellCommand(unzipDsymCommand.toString())
-            .addInput(tempDsymBundleZip)
-            .addOutput(dsymPlist)
-            .addOutput(debugSymbolFile)
-            .build(ruleContext));
-
-    return this;
-  }
-
-  private PathFragment removeSuffix(PathFragment path, String suffix) {
-    String name = path.getBaseName();
-    Preconditions.checkArgument(
-        name.endsWith(suffix), "expect %s to end with %s, but it does not", name, suffix);
-    return path.replaceName(name.substring(0, name.length() - suffix.length()));
   }
 
   /** Returns a list of clang flags used for all link and compile actions executed through clang. */

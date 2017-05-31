@@ -388,7 +388,7 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
         null);
 
     // Sanity check that our invalidation receiver is working correctly. We'll rely on it again.
-    SkyKey actionKey = ActionExecutionValue.key(action);
+    SkyKey actionKey = ActionExecutionValue.key(OWNER_KEY, 0);
     TrackingEvaluationProgressReceiver.EvaluatedEntry evaluatedAction =
         progressReceiver.getEvalutedEntry(actionKey);
     assertThat(evaluatedAction).isNotNull();
@@ -443,7 +443,7 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
 
   private RootedPath createSkyframeDepOfAction() throws Exception {
     scratch.file(rootDirectory.getRelative("action.dep").getPathString(), "blah");
-    return RootedPath.toRootedPath(rootDirectory, new PathFragment("action.dep"));
+    return RootedPath.toRootedPath(rootDirectory, PathFragment.create("action.dep"));
   }
 
   private void appendToFile(Path path) throws Exception {

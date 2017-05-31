@@ -50,6 +50,7 @@ abstract class SandboxRunner {
    * @param allowNetwork - whether networking should be allowed for the process.
    * @param sandboxDebug - whether debugging message should be printed.
    * @param useFakeHostname - whether the hostname should be set to 'localhost' inside the sandbox.
+   * @param useFakeUsername - whether the username should be set to 'nobody' inside the sandbox.
    */
   void run(
       List<String> arguments,
@@ -58,11 +59,14 @@ abstract class SandboxRunner {
       int timeout,
       boolean allowNetwork,
       boolean sandboxDebug,
-      boolean useFakeHostname)
+      boolean useFakeHostname,
+      boolean useFakeUsername)
       throws ExecException {
     Command cmd;
     try {
-      cmd = getCommand(arguments, environment, timeout, allowNetwork, useFakeHostname);
+      cmd =
+          getCommand(
+              arguments, environment, timeout, allowNetwork, useFakeHostname, useFakeUsername);
     } catch (IOException e) {
       throw new UserExecException("I/O error during sandboxed execution", e);
     }
@@ -81,24 +85,28 @@ abstract class SandboxRunner {
         status = ((AbnormalTerminationException) e).getResult().getTerminationStatus();
         timedOut = !status.exited() && (status.getTerminatingSignal() == getSignalOnTimeout());
       }
+
       String statusMessage = status + " [sandboxed]";
+
       if (!verboseFailures) {
-        // simplest error message
+        // Simplest possible error message.
         throw new UserExecException(statusMessage, e, timedOut);
       }
-      List<String> commandList;
-      if (!sandboxDebug) {
-        commandList = arguments;
-      } else {
+
+      List<String> commandList = arguments;
+      if (sandboxDebug) {
+        // When using --sandbox_debug, show the entire command-line including the part where we call
+        // the sandbox helper binary.
         commandList = Arrays.asList(cmd.getCommandLineElements());
       }
+
       String commandFailureMessage =
-          CommandFailureUtils.describeCommandFailure(
-              true,
-              commandList,
-              environment,
-              null)
-          + (sandboxDebug ? "" : SANDBOX_DEBUG_SUGGESTION);
+          CommandFailureUtils.describeCommandFailure(true, commandList, environment, null);
+
+      if (!sandboxDebug) {
+        commandFailureMessage += SANDBOX_DEBUG_SUGGESTION;
+      }
+
       throw new UserExecException(commandFailureMessage, e, timedOut);
     }
   }
@@ -111,13 +119,15 @@ abstract class SandboxRunner {
    * @param timeout - after how many seconds should the process be killed.
    * @param allowNetwork - whether networking should be allowed for the process.
    * @param useFakeHostname - whether the hostname should be set to 'localhost' inside the sandbox.
+   * @param useFakeUsername - whether the username should be set to 'nobody' inside the sandbox.
    */
   protected abstract Command getCommand(
       List<String> arguments,
       Map<String, String> environment,
       int timeout,
       boolean allowNetwork,
-      boolean useFakeHostname)
+      boolean useFakeHostname,
+      boolean useFakeUsername)
       throws IOException;
 
   /**

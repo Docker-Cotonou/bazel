@@ -37,6 +37,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ActionsProvider;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
+import com.google.devtools.build.lib.analysis.DefaultProvider;
 import com.google.devtools.build.lib.analysis.OutputGroupProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -190,6 +191,35 @@ public class SkylarkRuleClassFunctions {
   )
   private static final ClassObjectConstructor struct = NativeClassObjectConstructor.STRUCT;
 
+  @SkylarkSignature(
+    name = "DefaultInfo",
+    returnType = ClassObjectConstructor.class,
+    doc =
+        "A provider that is provided by every rule, even if it iss not returned explicitly. "
+            + "A <code>DefaultInfo</code> accepts the following parameters:"
+            + "<li><code>files</code></li>"
+            + "<ul><li><code>runfiles</code></li>"
+            + "<li><code>data_runfiles</code></li>"
+            + "<li><code>default_runfiles</code></li>"
+            + "</ul>"
+            + "Each instance of the default provider contains the following standard "
+            + "fields: "
+            + "<li><code>files</code></li>"
+            + "<li><code>files_to_run</code></li>"
+            + "<ul><li><code>data_runfiles</code></li>"
+            + "<li><code>default_runfiles</code></li>"
+            + "</ul>"
+  )
+  private static final ClassObjectConstructor defaultInfo = DefaultProvider.SKYLARK_CONSTRUCTOR;
+
+  @SkylarkSignature(
+    name = "OutputGroupInfo",
+    returnType = ClassObjectConstructor.class,
+    doc = "todo"
+  )
+  private static final ClassObjectConstructor outputGroupInfo =
+      OutputGroupProvider.SKYLARK_CONSTRUCTOR;
+
   // TODO(bazel-team): Move to a "testing" namespace module. Normally we'd pass an objectType
   // to @SkylarkSignature to do this, but that doesn't work here because we're exposing an already-
   // configured BaseFunction, rather than defining a new BuiltinFunction. This should wait for
@@ -209,7 +239,7 @@ public class SkylarkRuleClassFunctions {
   )
   private static final ClassObjectConstructor actions = ActionsProvider.SKYLARK_CONSTRUCTOR;
 
-  @SkylarkSignature(name = "provider", returnType = SkylarkClassObjectConstructor.class, doc =
+  @SkylarkSignature(name = "provider", returnType = ClassObjectConstructor.class, doc =
       "Creates a declared provider 'constructor'. The return value of this"
           + "function can be used to create \"struct-like\" values. Example:<br>"
           + "<pre class=\"language-python\">data = provider()\n"
@@ -219,7 +249,7 @@ public class SkylarkRuleClassFunctions {
   )
   private static final BuiltinFunction provider =
       new BuiltinFunction("provider") {
-        public SkylarkClassObjectConstructor invoke(Location location) {
+        public ClassObjectConstructor invoke(Location location) {
           return new SkylarkClassObjectConstructor(
               "<no name>", // name is set on export.
               location);
@@ -285,7 +315,7 @@ public class SkylarkRuleClassFunctions {
                       + "Similar to computed dependency rule attributes, you can also specify the "
                       + "name of a function that returns the dictionary. This function can access "
                       + "all rule attributes that are listed as parameters in its function "
-                      + "signature. For example, <code>outputs = _my_func<code> with "
+                      + "signature. For example, <code>outputs = _my_func</code> with "
                       + "<code>def _my_func(srcs, deps):</code> has access to the attributes "
                       + "'srcs' and 'deps' (if defined)."
           ),
@@ -1028,7 +1058,7 @@ public class SkylarkRuleClassFunctions {
   )
   private static final BuiltinFunction output_group = new BuiltinFunction("output_group") {
     public SkylarkNestedSet invoke(TransitiveInfoCollection self, String group) {
-      OutputGroupProvider provider = self.getProvider(OutputGroupProvider.class);
+      OutputGroupProvider provider = OutputGroupProvider.get(self);
       NestedSet<Artifact> result = provider != null
           ? provider.getOutputGroup(group)
           : NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER);

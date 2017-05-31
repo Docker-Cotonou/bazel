@@ -35,6 +35,7 @@ import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.Proto
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.ToolchainInvocation;
 import com.google.devtools.build.lib.util.LazyString;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -308,6 +309,16 @@ public class ProtoCompileActionBuilderTest {
                     ImmutableList.of(artifact("@bla//foo:bar", "external/bla/foo/bar.proto")))
                 .argv())
         .containsExactly("-Ifoo/bar.proto=external/bla/foo/bar.proto");
+  }
+
+  // TODO(b/34107586): Fix and enable test.
+  @Ignore
+  @Test
+  public void directDependenciesOnExternalFiles() throws Exception {
+    ImmutableList<Artifact> protos =
+        ImmutableList.of(artifact("@bla//foo:bar", "external/bla/foo/bar.proto"));
+    assertThat(new ProtoCommandLineArgv(protos, protos).argv())
+        .containsExactly("--direct_dependencies=foo/bar.proto");
   }
 
   private Artifact artifact(String ownerLabel, String path) {

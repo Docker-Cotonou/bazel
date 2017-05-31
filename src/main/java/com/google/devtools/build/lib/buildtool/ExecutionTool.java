@@ -19,6 +19,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.base.Stopwatch;
+import com.google.common.base.Strings;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -243,9 +244,10 @@ public class ExecutionTool {
         SpawnActionContext context =
             strategyConverter.getStrategy(SpawnActionContext.class, entry.getValue());
         if (context == null) {
+          String strategy = Strings.emptyToNull(entry.getKey());
           throw makeExceptionForInvalidStrategyValue(
               entry.getValue(),
-              "spawn",
+              Joiner.on(' ').skipNulls().join(strategy, "spawn"),
               strategyConverter.getValidValues(SpawnActionContext.class));
         }
         spawnStrategyMap.put(entry.getKey(), context);
@@ -348,16 +350,18 @@ public class ExecutionTool {
       startLocalOutputBuild(analysisResult.getWorkspaceName());
     }
 
+    // Must be created after the output path is created above.
+    createActionLogDirectory();
+
     List<BuildConfiguration> targetConfigurations = configurations.getTargetConfigurations();
     BuildConfiguration targetConfiguration = targetConfigurations.size() == 1
         ? targetConfigurations.get(0) : null;
     if (targetConfigurations.size() == 1) {
       String productName = runtime.getProductName();
       String dirName = env.getWorkspaceName();
-      String workspaceName = analysisResult.getWorkspaceName();
       OutputDirectoryLinksUtils.createOutputDirectoryLinks(
-          dirName, env.getWorkspace(), env.getDirectories().getExecRoot(workspaceName),
-          env.getDirectories().getOutputPath(workspaceName), getReporter(), targetConfiguration,
+          dirName, env.getWorkspace(), env.getDirectories().getExecRoot(),
+          env.getDirectories().getOutputPath(), getReporter(), targetConfiguration,
           request.getBuildOptions().getSymlinkPrefix(productName), productName);
     }
 
@@ -412,7 +416,8 @@ public class ExecutionTool {
         // Free memory by removing cache entries that aren't going to be needed. Note that in
         // skyframe full, this destroys the action graph as well, so we can only do it after the
         // action graph is no longer needed.
-        env.getSkyframeBuildView().clearAnalysisCache(analysisResult.getTargetsToBuild());
+        env.getSkyframeBuildView()
+            .clearAnalysisCache(analysisResult.getTargetsToBuild(), analysisResult.getAspects());
       }
 
       configureResourceManager(request);
@@ -493,9 +498,6 @@ public class ExecutionTool {
     // Prepare for build.
     Profiler.instance().markPhase(ProfilePhase.PREPARE);
 
-    // Create some tools symlinks / cleanup per-build state
-    createActionLogDirectory();
-
     // Plant the symlink forest.
     try {
       new SymlinkForest(
@@ -515,12 +517,12 @@ public class ExecutionTool {
   }
 
   private void createActionLogDirectory() throws ExecutorInitException {
-    Path directory = env.getDirectories().getActionConsoleOutputDirectory();
+    Path directory = env.getActionConsoleOutputDirectory();
     try {
       if (directory.exists()) {
         FileSystemUtils.deleteTree(directory);
       }
-      directory.createDirectory();
+      FileSystemUtils.createDirectoryAndParents(directory);
     } catch (IOException e) {
       throw new ExecutorInitException("Couldn't delete action output directory", e);
     }
@@ -652,7 +654,7 @@ public class ExecutionTool {
     BuildRequest.BuildRequestOptions options = request.getBuildOptions();
     boolean keepGoing = request.getViewOptions().keepGoing;
 
-    Path actionOutputRoot = env.getDirectories().getActionConsoleOutputDirectory();
+    Path actionOutputRoot = env.getActionConsoleOutputDirectory();
     Predicate<Action> executionFilter = CheckUpToDateFilter.fromOptions(
         request.getOptions(ExecutionOptions.class));
 

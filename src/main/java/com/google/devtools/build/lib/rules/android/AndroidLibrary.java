@@ -72,7 +72,7 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
 
     NestedSetBuilder<Artifact> proguardConfigsbuilder = NestedSetBuilder.stableOrder();
     proguardConfigsbuilder.addTransitive(new ProguardLibrary(ruleContext).collectProguardSpecs());
-    AndroidIdlHelper.addSupportLibProguardConfigs(ruleContext, proguardConfigsbuilder);
+    AndroidIdlHelper.maybeAddSupportLibProguardConfigs(ruleContext, proguardConfigsbuilder);
     NestedSet<Artifact> transitiveProguardConfigs = proguardConfigsbuilder.build();
 
     JavaCommon javaCommon =
@@ -96,17 +96,18 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
           true, /* isLibrary */
           ResourceDependencies.fromRuleDeps(ruleContext, JavaCommon.isNeverLink(ruleContext)),
           ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_R_TXT),
-          ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_SYMBOLS),
-          ResourceConfigurationFilter.empty(ruleContext),
+          ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_MERGED_SYMBOLS),
+          ResourceFilter.empty(ruleContext),
           ImmutableList.<String>of(), /* uncompressedExtensions */
           false, /* crunchPng */
-          ImmutableList.<String>of(), /* densities */
           false, /* incremental */
           null, /* proguardCfgOut */
           null, /* mainDexProguardCfg */
           ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_PROCESSED_MANIFEST),
           ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_RESOURCES_ZIP),
-          DataBinding.isEnabled(ruleContext) ? DataBinding.getLayoutInfoFile(ruleContext) : null);
+          DataBinding.isEnabled(ruleContext) ? DataBinding.getLayoutInfoFile(ruleContext) : null,
+          null, /* featureOf */
+          null /* featureAfter */);
       if (ruleContext.hasErrors()) {
         return null;
       }
@@ -115,7 +116,8 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
           ResourceDependencies.fromRuleResourceAndDeps(ruleContext, false /* neverlink */));
     }
 
-    if (!ruleContext.getFragment(AndroidConfiguration.class).allowSrcsLessAndroidLibraryDeps()
+    AndroidConfiguration androidConfig = ruleContext.getFragment(AndroidConfiguration.class);
+    if (!androidConfig.allowSrcsLessAndroidLibraryDeps()
         && !definesLocalResources
         && ruleContext.attributes().get("srcs", BuildType.LABEL_LIST).isEmpty()
         && ruleContext.attributes().get("idl_srcs", BuildType.LABEL_LIST).isEmpty()
@@ -129,7 +131,8 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
         resourceApk,
         false /* addCoverageSupport */,
         true /* collectJavaCompilationArgs */,
-        false /* isBinary */);
+        false /* isBinary */,
+        androidConfig.includeLibraryResourceJars());
     if (javaTargetAttributes == null) {
       return null;
     }
@@ -192,10 +195,15 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
       .build(ruleContext);
 
     RuleConfiguredTargetBuilder builder = new RuleConfiguredTargetBuilder(ruleContext);
-    androidCommon.addTransitiveInfoProviders(builder, androidSemantics, aarOut,
-        resourceApk, null, ImmutableList.<Artifact>of());
-    androidSemantics.addTransitiveInfoProviders(
-        builder, ruleContext, javaCommon, androidCommon, null);
+    androidCommon.addTransitiveInfoProviders(
+        builder,
+        androidSemantics,
+        aarOut,
+        resourceApk,
+        null,
+        ImmutableList.<Artifact>of(),
+        NativeLibs.EMPTY);
+    androidSemantics.addTransitiveInfoProviders(builder, ruleContext, javaCommon, androidCommon);
 
     NestedSetBuilder<Artifact> transitiveResourcesJars = collectTransitiveResourceJars(ruleContext);
     if (androidCommon.getResourceClassJar() != null) {
@@ -268,3 +276,4 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
     return builder;
   }
 }
+

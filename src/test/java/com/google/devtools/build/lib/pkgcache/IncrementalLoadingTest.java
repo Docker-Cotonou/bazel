@@ -32,7 +32,6 @@ import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.packages.Preprocessor;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.util.LoadingMock;
@@ -44,6 +43,7 @@ import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.syntax.GlobList;
+import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -109,7 +109,7 @@ public class IncrementalLoadingTest {
   }
 
   protected PackageCacheTester createTester(FileSystem fs, ManualClock clock) throws Exception {
-    return new PackageCacheTester(fs, clock, Preprocessor.Factory.Supplier.NullSupplier.INSTANCE);
+    return new PackageCacheTester(fs, clock);
   }
 
   @Test
@@ -456,9 +456,7 @@ public class IncrementalLoadingTest {
     private boolean everythingModified = false;
     private ModifiedFileSet modifiedFileSet;
 
-    public PackageCacheTester(
-        FileSystem fs, ManualClock clock, Preprocessor.Factory.Supplier supplier)
-            throws IOException {
+    public PackageCacheTester(FileSystem fs, ManualClock clock) throws IOException {
       this.clock = clock;
       workspace = fs.getPath("/workspace");
       workspace.createDirectory();
@@ -482,7 +480,6 @@ public class IncrementalLoadingTest {
               loadingMock.createRuleClassProvider().getBuildInfoFactories(),
               ImmutableList.of(new ManualDiffAwarenessFactory()),
               Predicates.<PathFragment>alwaysFalse(),
-              supplier,
               ImmutableMap.<SkyFunctionName, SkyFunction>of(),
               ImmutableList.<PrecomputedValue.Injected>of(),
               ImmutableList.<SkyValueDirtinessChecker>of(),
@@ -496,6 +493,7 @@ public class IncrementalLoadingTest {
       skyframeExecutor.preparePackageLoading(
           new PathPackageLocator(outputBase, ImmutableList.of(workspace)),
           packageCacheOptions,
+          Options.getDefaults(SkylarkSemanticsOptions.class),
           "",
           UUID.randomUUID(),
           ImmutableMap.<String, String>of(),
@@ -524,7 +522,7 @@ public class IncrementalLoadingTest {
       Path path = workspace.getRelative(fileName);
       Preconditions.checkState(!path.exists());
       FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
-      path.createSymbolicLink(new PathFragment(target));
+      path.createSymbolicLink(PathFragment.create(target));
       changes.add(path);
     }
 
@@ -546,7 +544,7 @@ public class IncrementalLoadingTest {
       Path symlink = workspace.getRelative(fileName);
       Preconditions.checkState(symlink.exists());
       symlink.delete();
-      symlink.createSymbolicLink(new PathFragment(newTarget));
+      symlink.createSymbolicLink(PathFragment.create(newTarget));
       changes.add(symlink);
     }
 
@@ -583,6 +581,7 @@ public class IncrementalLoadingTest {
       skyframeExecutor.preparePackageLoading(
           new PathPackageLocator(outputBase, ImmutableList.of(workspace)),
           packageCacheOptions,
+          Options.getDefaults(SkylarkSemanticsOptions.class),
           "",
           UUID.randomUUID(),
           ImmutableMap.<String, String>of(),

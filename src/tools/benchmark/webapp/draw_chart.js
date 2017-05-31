@@ -33,9 +33,9 @@ function drawAllChart() {
       let responses = [].slice.call(arguments, 1);
       for (let response of responses) {
         let data = response[0];
+        targetNum = data.buildTargetResults.length;
 
         if (!chartInit) {
-          targetNum = data.buildTargetResults.length;
           initChartData(data.buildTargetResults, dashboard, control, chart, tableData, options);
           chartInit = true;
         }
@@ -271,4 +271,20 @@ function hideOrShow(dashboard, chart, columns, tableData, options) {
   const view = new google.visualization.DataView(tableData);
   view.setColumns(columns);
   dashboard.draw(view);
+}
+
+/** @type {!Array<string>} */
+const chartDivList = ['java', 'cpp'];
+/**
+ * Only show the specific div
+ * @param {!string} divId the id of the div that needs to be shown
+ */
+function showChartDiv(divId) {
+  for (let id of chartDivList) {
+    if (id === divId) {
+      $('#' + id).show();
+    } else {
+      $('#' + id).hide();
+    }
+  }
 }

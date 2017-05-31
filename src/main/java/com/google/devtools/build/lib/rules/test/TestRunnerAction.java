@@ -58,7 +58,7 @@ import javax.annotation.Nullable;
  */
 // Not final so that we can mock it in tests.
 public class TestRunnerAction extends AbstractAction implements NotifyOnActionCacheHit {
-  public static final PathFragment COVERAGE_TMP_ROOT = new PathFragment("_coverage");
+  public static final PathFragment COVERAGE_TMP_ROOT = PathFragment.create("_coverage");
 
   // Used for selecting subset of testcase / testmethods.
   private static final String TEST_BRIDGE_TEST_FILTER_ENV = "TESTBRIDGE_TEST_ONLY";
@@ -86,17 +86,15 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
   private final PathFragment testInfrastructureFailure;
   private final PathFragment baseDir;
   private final Artifact coverageData;
-  private final Artifact microCoverageData;
   private final TestTargetProperties testProperties;
   private final TestTargetExecutionSettings executionSettings;
   private final int shardNum;
   private final int runNumber;
   private final String workspaceName;
-  private final boolean useExperimentalTestRunner;
+  private final boolean useTestRunner;
 
   // Mutable state related to test caching.
-  private boolean checkedCaching = false;
-  private boolean unconditionalExecution = false;
+  private Boolean unconditionalExecution; // lazily initialized: null indicates unknown
 
   private ImmutableMap<String, String> testEnv;
 
@@ -124,7 +122,6 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
       Artifact testLog,
       Artifact cacheStatus,
       Artifact coverageArtifact,
-      Artifact microCoverageArtifact,
       TestTargetProperties testProperties,
       Map<String, String> extraTestEnv,
       TestTargetExecutionSettings executionSettings,
@@ -132,17 +129,16 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
       int runNumber,
       BuildConfiguration configuration,
       String workspaceName,
-      boolean useExperimentalTestRunner) {
+      boolean useTestRunner) {
     super(owner, inputs,
         // Note that this action only cares about the runfiles, not the mapping.
-        new RunfilesSupplierImpl(new PathFragment("runfiles"), executionSettings.getRunfiles()),
-        list(testLog, cacheStatus, coverageArtifact, microCoverageArtifact));
+        new RunfilesSupplierImpl(PathFragment.create("runfiles"), executionSettings.getRunfiles()),
+        list(testLog, cacheStatus, coverageArtifact));
     this.runtime = runtime;
     this.configuration = Preconditions.checkNotNull(configuration);
     this.testLog = testLog;
     this.cacheStatus = cacheStatus;
     this.coverageData = coverageArtifact;
-    this.microCoverageData = microCoverageArtifact;
     this.shardNum = shardNum;
     this.runNumber = runNumber;
     this.testProperties = Preconditions.checkNotNull(testProperties);
@@ -172,7 +168,7 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
     this.undeclaredOutputsAnnotationsPath = undeclaredOutputsAnnotationsDir.getChild("ANNOTATIONS");
     this.testInfrastructureFailure = baseDir.getChild("test.infrastructure_failure");
     this.workspaceName = workspaceName;
-    this.useExperimentalTestRunner = useExperimentalTestRunner;
+    this.useTestRunner = useTestRunner;
 
     Map<String, String> mergedTestEnv = new HashMap<>(configuration.getTestEnv());
     mergedTestEnv.putAll(extraTestEnv);
@@ -208,9 +204,6 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
     outputs.add(ActionInputHelper.fromPath(getUndeclaredOutputsAnnotationsPath()));
     if (isCoverageMode()) {
       outputs.add(getCoverageData());
-      if (isMicroCoverageMode()) {
-        outputs.add(getMicroCoverageData());
-      }
     }
     return outputs;
   }
@@ -240,8 +233,9 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
   public boolean executeUnconditionally() {
     // Note: isVolatile must return true if executeUnconditionally can ever return true
     // for this instance.
-    unconditionalExecution = updateExecuteUnconditionallyFromTestStatus();
-    checkedCaching = true;
+    if (unconditionalExecution == null) {
+      unconditionalExecution = computeExecuteUnconditionallyFromTestStatus();
+    }
     return unconditionalExecution;
   }
 
@@ -272,7 +266,7 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
     return null;
   }
 
-  private boolean updateExecuteUnconditionallyFromTestStatus() {
+  private boolean computeExecuteUnconditionallyFromTestStatus() {
     if (configuration.cacheTestResults() == TriState.NO || testProperties.isExternal()
         || (configuration.cacheTestResults() == TriState.AUTO
             && configuration.getRunsPerTestForLabel(getOwner().getLabel()) > 1)) {
@@ -298,19 +292,17 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
   }
 
   /**
-   * May only be called after the dependency checked called executeUnconditionally().
    * Returns whether caching has been deemed safe by looking at the previous test run
    * (for local caching). If the previous run is not present, return "true" here, as
    * remote execution caching should be safe.
    */
   public boolean shouldCacheResult() {
-    Preconditions.checkState(checkedCaching);
-    return !unconditionalExecution;
+    return !executeUnconditionally();
   }
 
   @Override
   public void actionCacheHit(Executor executor) {
-    checkedCaching = false;
+    unconditionalExecution = null;
     try {
       executor.getEventBus().post(
           executor.getContext(TestActionContext.class).newCachedTestResult(
@@ -360,8 +352,6 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
 
     // We cannot use coverageData artifact since it may be null. Generate coverage name instead.
     execRoot.getRelative(baseDir.getChild(coveragePrefix + ".dat")).delete();
-    // We cannot use microcoverageData artifact since it may be null. Generate filename instead.
-    execRoot.getRelative(baseDir.getChild(coveragePrefix + ".micro.dat")).delete();
 
     // Delete files fetched from remote execution.
     execRoot.getRelative(baseDir.getChild("test.zip")).delete();
@@ -443,12 +433,6 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
       env.put("COVERAGE_MANIFEST", getCoverageManifest().getExecPathString());
       env.put("COVERAGE_DIR", getCoverageDirectory().getPathString());
       env.put("COVERAGE_OUTPUT_FILE", getCoverageData().getExecPathString());
-      if (isMicroCoverageMode()) {
-        env.put("MICROCOVERAGE_REQUESTED", "true");
-        env.put("MICROCOVERAGE_OUTPUT_FILE", getMicroCoverageData().getExecPathString());
-      } else {
-        env.put("MICROCOVERAGE_REQUESTED", "false");
-      }
     }
   }
 
@@ -578,18 +562,6 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
   }
 
   /**
-   * @return microcoverage data artifact or null if code coverage was not requested.
-   */
-  @Nullable public Artifact getMicroCoverageData() {
-    return microCoverageData;
-  }
-
-  /** Returns true if micro-coverage data should be gathered. */
-  public boolean isMicroCoverageMode() {
-    return microCoverageData != null;
-  }
-
-  /**
    * Returns a directory to temporarily store coverage results for the given action relative to the
    * execution root. This directory is used to store all coverage results related to the test
    * execution with exception of the locally generated *.gcda files. Those are stored separately
@@ -612,8 +584,8 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
     return executionSettings;
   }
 
-  public boolean useExperimentalTestRunner() {
-    return useExperimentalTestRunner;
+  public boolean useTestRunner() {
+    return useTestRunner;
   }
 
   public boolean isSharded() {
@@ -658,7 +630,7 @@ public class TestRunnerAction extends AbstractAction implements NotifyOnActionCa
     } catch (ExecException e) {
       throw e.toActionExecutionException(this);
     } finally {
-      checkedCaching = false;
+      unconditionalExecution = null;
     }
   }
 

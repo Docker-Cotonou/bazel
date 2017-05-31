@@ -1372,11 +1372,12 @@ $ bazel fetch //...
 
 <h4 id='flag--output_symbol_counts'><code class='flag'>--[no]output_symbol_counts</code></h4>
 <p>
-  If enabled, each gold-invoked link of a C++ executable binary will also output
+  If enabled, each gold-invoked link of a C++ executable binary will output
   a <i>symbol counts</i> file (via the <code>--print-symbol-counts</code> gold
-  option) that logs the number of symbols from each .o input that were used in
-  the binary. This can be used to track unnecessary link dependencies. The
-  symbol counts file is written to the binary's output path with the name
+  option). For each linker input, the file logs the number of symbols that were
+  defined and the number of symbols that were used in the binary.
+  This information can be used to track unnecessary link dependencies.
+  The symbol counts file is written to the binary's output path with the name
   <code>[targetname].sc</code>.
 </p>
 <p>
@@ -2310,7 +2311,7 @@ either to the terminal, or to additional log files.
   &gt;&gt;&gt;&gt;&gt; # //examples/cpp:hello-world [action 'Linking examples/cpp/hello-world']
   (cd /home/jrluser/.cache/bazel/_bazel_jrluser/4c084335afceb392cfbe7c31afee3a9f/bazel && \
     exec env - \
-    /usr/bin/gcc -o bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world -B/usr/bin/ -Wl,-z,relro,-z,now -no-canonical-prefixes -pass-exit-codes '-Wl,--build-id=md5' '-Wl,--hash-style=gnu' -Wl,-S -Wl,@bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world-2.params)
+    /usr/bin/gcc -o bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world -B/usr/bin/ -Wl,-z,relro,-z,now -no-canonical-prefixes -pass-exit-codes -Wl,-S -Wl,@bazel-out/local_linux-fastbuild/bin/examples/cpp/hello-world-2.params)
 </pre>
 <p>
   Where possible, commands are printed in a Bourne shell compatible syntax,
@@ -2780,7 +2781,7 @@ Examples:
   filter args to the test runner.
 </p>
 
-<h4 id="other_options_for_blaze_test">Other options for <code>bazel test</code></h4>
+<h4 id="other_options_for_bazel_test">Other options for <code>bazel test</code></h4>
 <p>
   The syntax and the remaining options are exactly like
   <a href='#build'>bazel build</a>.
@@ -3134,12 +3135,23 @@ in an environment closer to the current shell environment. Note that none of the
   Starts the app in a clean state after installing. Equivalent to
   <code>--start=COLD</code>.
 </p>
-<h4 id='flag--start'><code class='flag'>--start (NO|COLD|WARM)</code></h4>
+<h4 id='flag--debug_app'><code class='flag'>--debug_app</code></h4>
 <p>
-  How the app should be started after installing it. Set to <code>WARM</code> to
-  preserve and restore application state on incremental installs. Set to
-  <code>COLD</code> to start the app from a clean state after install. Defaults
-  <code>NO</code> which does not start the app.
+  Waits for debugger to be attached before starting the app in a clean state after installing.
+  Equivalent to <code>--start=DEBUG</code>.
+</p>
+<h4 id='flag--start'><code class='flag'>--start=<i>start_type</i></code></h4>
+<p>
+  How the app should be started after installing it. Supported <i>start_type</i>s are:
+  <ul>
+    <li><code>NO</code> Does not start the app. This is the default.</li>
+    <li><code>COLD</code> Starts the app from a clean state after install.</li>
+    <li><code>WARM</code> Preserves and restores the application state on incremental installs.</li>
+    <li><code>DEBUG</code> Waits for the debugger before starting the app in a clean state after install.</li>
+  </ul>
+  Note that if more than one of <code class='flag'>--start=<i>start_type</i></code>,
+  <code class='flag'>--start_app</code> or
+  <code class='flag'>--debug_app</code> is set, the last value will be used.
 </p>
 <h4 id='flag--adb'><code class='flag'>--adb <var>path</var></code></h4>
 <p>

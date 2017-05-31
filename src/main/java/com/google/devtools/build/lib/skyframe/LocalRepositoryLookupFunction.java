@@ -94,7 +94,7 @@ public class LocalRepositoryLookupFunction implements SkyFunction {
               directory.getRoot(),
               directory
                   .getRelativePath()
-                  .getChild(PackageLookupValue.BuildFileName.WORKSPACE.getFilename()));
+                  .getRelative(PackageLookupValue.BuildFileName.WORKSPACE.getFilenameFragment()));
       FileValue workspaceFileValue =
           (FileValue)
               env.getValueOrThrow(
@@ -208,7 +208,7 @@ public class LocalRepositoryLookupFunction implements SkyFunction {
                 @Override
                 public boolean apply(@Nullable Rule rule) {
                   AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
-                  PathFragment pathAttr = new PathFragment(mapper.get("path", Type.STRING));
+                  PathFragment pathAttr = PathFragment.create(mapper.get("path", Type.STRING));
                   return directory.getRelativePath().equals(pathAttr);
                 }
               },

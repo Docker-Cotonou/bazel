@@ -127,6 +127,8 @@ public final class CppFileTypes {
       }
     };
 
+  // Minimized bitcode file emitted by the ThinLTO compile step and used just for LTO indexing.
+  public static final FileType LTO_INDEXING_OBJECT_FILE = FileType.of(".indexing.o");
 
   public static final FileType SHARED_LIBRARY = FileType.of(".so", ".dylib", ".dll");
   public static final FileType INTERFACE_SHARED_LIBRARY = FileType.of(".ifso");
@@ -154,6 +156,7 @@ public final class CppFileTypes {
   public static final FileType COVERAGE_DATA_IMPORTS = FileType.of(".gcda.imports");
   public static final FileType GCC_AUTO_PROFILE = FileType.of(".afdo");
   public static final FileType LLVM_PROFILE = FileType.of(".profdata");
+  public static final FileType LLVM_PROFILE_RAW = FileType.of(".profraw");
 
   public static final FileType CPP_MODULE_MAP = FileType.of(".cppmap");
   public static final FileType CPP_MODULE = FileType.of(".pcm");
@@ -183,7 +186,7 @@ public final class CppFileTypes {
         }
       };
 
-  public static final boolean mustProduceDotdFile(Artifact source) {
+  public static final boolean headerDiscoveryRequired(Artifact source) {
     // Sources from TreeArtifacts and TreeFileArtifacts will not generate dotd file.
     if (source.isTreeArtifact() || source.hasParent()) {
       return false;

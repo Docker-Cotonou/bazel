@@ -20,23 +20,17 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
-import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
-import com.google.devtools.build.lib.actions.ResourceManager;
-import com.google.devtools.build.lib.actions.ResourceManager.ResourceHandle;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
-import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
-import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.rules.test.TestRunnerAction;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
@@ -50,19 +44,19 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SearchPath;
 import com.google.devtools.build.lib.vfs.Symlinks;
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Strategy that uses sandboxing to execute a process, for Darwin */
 @ExecutionStrategy(
-  name = {"sandboxed"},
+  name = {"sandboxed", "darwin-sandbox"},
   contextType = SpawnActionContext.class
 )
 public class DarwinSandboxedStrategy extends SandboxStrategy {
@@ -76,13 +70,11 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
   private final ImmutableList<Path> confPaths;
   private final SpawnHelpers spawnHelpers;
 
-  private final UUID uuid = UUID.randomUUID();
-  private final AtomicInteger execCounter = new AtomicInteger();
-
   private DarwinSandboxedStrategy(
       BuildRequest buildRequest,
       Map<String, String> clientEnv,
       BlazeDirectories blazeDirs,
+      Path sandboxBase,
       boolean verboseFailures,
       String productName,
       ImmutableList<Path> confPaths,
@@ -90,6 +82,7 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
     super(
         buildRequest,
         blazeDirs,
+        sandboxBase,
         verboseFailures,
         buildRequest.getOptions(SandboxOptions.class));
     this.clientEnv = ImmutableMap.copyOf(clientEnv);
@@ -106,6 +99,7 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
       BuildRequest buildRequest,
       Map<String, String> clientEnv,
       BlazeDirectories blazeDirs,
+      Path sandboxBase,
       boolean verboseFailures,
       String productName)
       throws IOException {
@@ -124,6 +118,7 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
         buildRequest,
         clientEnv,
         blazeDirs,
+        sandboxBase,
         verboseFailures,
         productName,
         writablePaths.build(),
@@ -148,49 +143,28 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
   }
 
   @Override
-  public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
-      throws ExecException, InterruptedException {
-    exec(spawn, actionExecutionContext, null);
-  }
-
-  @Override
-  public void exec(
+  protected void actuallyExec(
       Spawn spawn,
       ActionExecutionContext actionExecutionContext,
       AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles)
-      throws ExecException, InterruptedException {
+      throws ExecException, InterruptedException, IOException {
     Executor executor = actionExecutionContext.getExecutor();
-    // Certain actions can't run remotely or in a sandbox - pass them on to the standalone strategy.
-    if (!spawn.isRemotable() || spawn.hasNoSandbox()) {
-      SandboxHelpers.fallbackToNonSandboxedExecution(spawn, actionExecutionContext, executor);
-      return;
-    }
-
-    EventBus eventBus = actionExecutionContext.getExecutor().getEventBus();
-    ActionExecutionMetadata owner = spawn.getResourceOwner();
-    eventBus.post(ActionStatusMessage.schedulingStrategy(owner));
-    try (ResourceHandle handle =
-        ResourceManager.instance().acquireResources(owner, spawn.getLocalResources())) {
-      SandboxHelpers.postActionStatusMessage(eventBus, spawn);
-      actuallyExec(spawn, actionExecutionContext, writeOutputFiles);
-    }
-  }
-
-  private void actuallyExec(
-      Spawn spawn,
-      ActionExecutionContext actionExecutionContext,
-      AtomicReference<Class<? extends SpawnActionContext>> writeOutputFiles)
-      throws ExecException, InterruptedException {
-    Executor executor = actionExecutionContext.getExecutor();
+    executor
+        .getEventBus()
+        .post(ActionStatusMessage.runningStrategy(spawn.getResourceOwner(), "darwin-sandbox"));
     SandboxHelpers.reportSubcommand(executor, spawn);
 
-    PrintWriter errWriter =
-        sandboxDebug
-            ? new PrintWriter(actionExecutionContext.getFileOutErr().getErrorStream())
-            : null;
+    PrintWriter errWriter = null;
+    if (sandboxDebug) {
+      errWriter =
+          new PrintWriter(
+              new BufferedWriter(
+                  new OutputStreamWriter(
+                      actionExecutionContext.getFileOutErr().getErrorStream(), UTF_8)));
+    }
 
     // Each invocation of "exec" gets its own sandbox.
-    Path sandboxPath = SandboxHelpers.getSandboxRoot(blazeDirs, productName, uuid, execCounter);
+    Path sandboxPath = getSandboxRoot();
     Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(execRoot.getBaseName());
 
     if (errWriter != null) {
@@ -202,18 +176,12 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
         StandaloneSpawnStrategy.locallyDeterminedEnv(execRoot, productName, spawn.getEnvironment());
 
     Set<Path> writableDirs = getWritableDirs(sandboxExecRoot, spawn.getEnvironment());
-
     Path runUnderPath = getRunUnderPath(spawn);
-
     HardlinkedExecRoot hardlinkedExecRoot =
         new HardlinkedExecRoot(execRoot, sandboxPath, sandboxExecRoot, errWriter);
     ImmutableSet<PathFragment> outputs = SandboxHelpers.getOutputFiles(spawn);
-    try {
-      hardlinkedExecRoot.createFileSystem(
-          getMounts(spawn, actionExecutionContext), outputs, writableDirs);
-    } catch (IOException e) {
-      throw new UserExecException("Could not prepare sandbox directory", e);
-    }
+    hardlinkedExecRoot.createFileSystem(
+        getMounts(spawn, actionExecutionContext), outputs, writableDirs);
 
     // Flush our logs before executing the spawn, otherwise they might get overwritten.
     if (errWriter != null) {
@@ -222,12 +190,7 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
 
     DarwinSandboxRunner runner =
         new DarwinSandboxRunner(
-            sandboxPath,
-            sandboxExecRoot,
-            getWritableDirs(sandboxExecRoot, spawnEnvironment),
-            getInaccessiblePaths(),
-            runUnderPath,
-            verboseFailures);
+            sandboxPath, sandboxExecRoot, writableDirs, runUnderPath, verboseFailures);
     try {
       runSpawn(
           spawn,
@@ -242,24 +205,25 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
         try {
           FileSystemUtils.deleteTree(sandboxPath);
         } catch (IOException e) {
-          executor
-              .getEventHandler()
-              .handle(
-                  Event.warn(
-                      String.format(
-                          "Cannot delete sandbox directory after action execution: %s (%s)",
-                          sandboxPath.getPathString(), e)));
+          // This usually means that the Spawn itself exited, but still has children running that
+          // we couldn't wait for, which now block deletion of the sandbox directory. On Linux this
+          // should never happen, as we use PID namespaces and where they are not available the
+          // subreaper feature to make sure all children have been reliably killed before returning,
+          // but on other OS this might not always work. The SandboxModule will try to delete them
+          // again when the build is all done, at which point it hopefully works, so let's just go
+          // on here.
         }
       }
     }
   }
 
   @Override
-  protected ImmutableSet<Path> getWritableDirs(Path sandboxExecRoot, Map<String, String> env) {
-    FileSystem fs = sandboxExecRoot.getFileSystem();
+  protected ImmutableSet<Path> getWritableDirs(Path sandboxExecRoot, Map<String, String> env)
+      throws IOException {
     ImmutableSet.Builder<Path> writableDirs = ImmutableSet.builder();
-
     writableDirs.addAll(super.getWritableDirs(sandboxExecRoot, env));
+
+    FileSystem fs = sandboxExecRoot.getFileSystem();
     writableDirs.add(fs.getPath("/dev"));
 
     String sysTmpDir = System.getenv("TMPDIR");
@@ -282,15 +246,6 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
     }
 
     return writableDirs.build();
-  }
-
-  @Override
-  protected ImmutableSet<Path> getInaccessiblePaths() {
-    ImmutableSet.Builder<Path> inaccessiblePaths = ImmutableSet.builder();
-    inaccessiblePaths.addAll(super.getInaccessiblePaths());
-    inaccessiblePaths.add(blazeDirs.getWorkspace());
-    inaccessiblePaths.add(execRoot);
-    return inaccessiblePaths.build();
   }
 
   @Override
@@ -341,8 +296,7 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
   }
 
   private void finalizeLinksPath(
-      Map<PathFragment, Path> finalizedMounts, PathFragment target, Path source, FileStatus stat)
-      throws IOException {
+      Map<PathFragment, Path> finalizedMounts, PathFragment target, Path source, FileStatus stat) {
     // The source must exist.
     Preconditions.checkArgument(stat != null, "%s does not exist", source.toString());
     finalizedMounts.put(target, source);
@@ -361,7 +315,7 @@ public class DarwinSandboxedStrategy extends SandboxStrategy {
       TestRunnerAction testRunnerAction = ((TestRunnerAction) spawn.getResourceOwner());
       RunUnder runUnder = testRunnerAction.getExecutionSettings().getRunUnder();
       if (runUnder != null && runUnder.getCommand() != null) {
-        PathFragment sourceFragment = new PathFragment(runUnder.getCommand());
+        PathFragment sourceFragment = PathFragment.create(runUnder.getCommand());
         Path mount;
         if (sourceFragment.isAbsolute()) {
           mount = blazeDirs.getFileSystem().getPath(sourceFragment);

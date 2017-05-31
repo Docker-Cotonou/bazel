@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.analysis.mock;
 import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ConfigurationCollectionFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
@@ -30,6 +31,7 @@ import com.google.devtools.build.lib.packages.util.MockToolsConfig;
 import com.google.devtools.build.lib.rules.android.AndroidConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.swift.SwiftConfiguration;
+import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppConfigurationLoader;
 import com.google.devtools.build.lib.rules.cpp.FdoSupportFunction;
 import com.google.devtools.build.lib.rules.cpp.FdoSupportValue;
@@ -39,8 +41,6 @@ import com.google.devtools.build.lib.rules.objc.J2ObjcConfiguration;
 import com.google.devtools.build.lib.rules.objc.ObjcConfigurationLoader;
 import com.google.devtools.build.lib.rules.proto.ProtoConfiguration;
 import com.google.devtools.build.lib.rules.python.PythonConfigurationLoader;
-import com.google.devtools.build.lib.testutil.BuildRuleBuilder;
-import com.google.devtools.build.lib.testutil.BuildRuleWithDefaultsBuilder;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -81,6 +81,7 @@ public final class BazelAnalysisMock extends AnalysisMock {
     List<String> workspaceContents = getWorkspaceContents(config);
     config.create(
         "/local_config_xcode/BUILD", "xcode_config(name = 'host_xcodes')");
+    config.create("/local_config_xcode/WORKSPACE");
     config.overwrite("WORKSPACE", workspaceContents.toArray(new String[workspaceContents.size()]));
     config.create("/bazel_tools_workspace/WORKSPACE", "workspace(name = 'bazel_tools')");
     config.create(
@@ -111,7 +112,8 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "filegroup(name='jacoco-blaze-agent', srcs = [])",
         "exports_files(['JavaBuilder_deploy.jar','SingleJar_deploy.jar','TestRunner_deploy.jar',",
         "               'JavaBuilderCanary_deploy.jar', 'ijar', 'GenClass_deploy.jar',",
-        "               'turbine_deploy.jar','ExperimentalTestRunner_deploy.jar'])");
+        "               'turbine_deploy.jar','ExperimentalTestRunner_deploy.jar'])",
+        "sh_binary(name = 'proguard_whitelister', srcs = ['empty.sh'])");
 
 
     ImmutableList<String> androidBuildContents = createAndroidBuildContents();
@@ -119,9 +121,8 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "/bazel_tools_workspace/tools/android/BUILD",
         androidBuildContents.toArray(new String[androidBuildContents.size()]));
     config.create(
-        "/bazel_tools_workspace/third_party/java/apkbuilder/BUILD",
-        "sh_binary(name = 'embedded_apkbuilder',",
-        "          srcs = ['embedded_apkbuilder.sh'])");
+        "/bazel_tools_workspace/tools/android/emulator/BUILD",
+        Iterables.toArray(createToolsAndroidEmulatorContents(), String.class));
 
     config.create(
         "/bazel_tools_workspace/tools/genrule/BUILD", "exports_files(['genrule-setup.sh'])");
@@ -154,16 +155,40 @@ public final class BazelAnalysisMock extends AnalysisMock {
     ccSupport().setup(config);
   }
 
+  /** Contents of {@code //tools/android/emulator/BUILD.tools}. */
+  private ImmutableList<String> createToolsAndroidEmulatorContents() {
+    return ImmutableList.of(
+        "exports_files(['emulator_arm', 'emulator_x86', 'mksd', 'empty_snapshot_fs'])",
+        "filegroup(name = 'emulator_x86_bios', srcs = ['bios.bin', 'vgabios-cirrus.bin'])",
+        "filegroup(name = 'xvfb_support', srcs = ['support_file1', 'support_file2'])",
+        "sh_binary(name = 'unified_launcher', srcs = ['empty.sh'])",
+        "filegroup(name = 'shbase', srcs = ['googletest.sh'])",
+        "filegroup(name = 'sdk_path', srcs = ['empty.sh'])");
+  }
+
   private ImmutableList<String> createAndroidBuildContents() {
     ImmutableList.Builder<String> androidBuildContents = ImmutableList.builder();
 
-    BuildRuleWithDefaultsBuilder ruleBuilder =
-        new BuildRuleWithDefaultsBuilder("android_sdk", "sdk")
-            .populateAttributes("", false);
-    androidBuildContents.add(ruleBuilder.build());
-    for (BuildRuleBuilder generatedRuleBuilder : ruleBuilder.getRulesToGenerate()) {
-      androidBuildContents.add(generatedRuleBuilder.build());
-    }
+    androidBuildContents.add(
+        "android_sdk(",
+        "    name = 'sdk',",
+        "    aapt = ':static_aapt_tool',",
+        "    adb = ':static_adb_tool',",
+        "    aidl = ':static_aidl_tool',",
+        "    android_jar = ':android_runtime_jar',",
+        "    annotations_jar = ':annotations_jar',",
+        "    apksigner = ':ApkSignerBinary',",
+        "    dx = ':dx_binary',",
+        "    framework_aidl = ':aidl_framework',",
+        "    main_dex_classes = ':mainDexClasses.rules',",
+        "    main_dex_list_creator = ':main_dex_list_creator',",
+        "    proguard = ':ProGuard',",
+        "    resource_extractor = ':resource_extractor',",
+        "    shrinked_android_jar = ':shrinkedAndroid.jar',",
+        "    zipalign = ':zipalign',",
+        ")",
+        "filegroup(name = 'android_runtime_jar', srcs = ['android.jar'])",
+        "filegroup(name = 'dx_binary', srcs = ['dx_binary.jar'])");
 
     androidBuildContents
         .add("sh_binary(name = 'aar_generator', srcs = ['empty.sh'])")
@@ -202,7 +227,11 @@ public final class BazelAnalysisMock extends AnalysisMock {
         .add("sh_binary(name = 'zip_manifest_creator', srcs = ['empty.sh'])")
         .add("sh_binary(name = 'aar_embedded_jars_extractor', srcs = ['empty.sh'])")
         .add("java_import(name = 'idlclass_import',")
-        .add("            jars = [ 'idlclass.jar' ])");
+        .add("            jars = [ 'idlclass.jar' ])")
+        .add("exports_files(['adb', 'adb_static'])")
+        .add("sh_binary(name = 'android_runtest', srcs = ['empty.sh'])")
+        .add("java_plugin(name = 'databinding_annotation_processor',")
+        .add("    processor_class = 'android.databinding.annotationprocessor.ProcessDataBinding')");
 
     return androidBuildContents.build();
   }
@@ -240,6 +269,7 @@ public final class BazelAnalysisMock extends AnalysisMock {
         new SwiftConfiguration.Loader(),
         new J2ObjcConfiguration.Loader(),
         new ProtoConfiguration.Loader(),
+        new ConfigFeatureFlagConfiguration.Loader(),
         new AndroidConfiguration.Loader());
   }
 

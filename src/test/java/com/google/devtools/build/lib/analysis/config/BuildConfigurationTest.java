@@ -26,8 +26,9 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment
 import com.google.devtools.build.lib.analysis.util.ConfigurationTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.packages.NoSuchPackageException;
+import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
-import com.google.devtools.build.lib.rules.cpp.CppOptions;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.objc.J2ObjcConfiguration;
 import com.google.devtools.common.options.Options;
@@ -267,33 +268,31 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
   }
 
   @Test
-  public void testGetOptionClass() throws Exception {
-    BuildConfiguration config = create();
-    // Directly defined option:
-    assertEquals(BuildConfiguration.Options.class, config.getOptionClass("compilation_mode"));
-    // Option defined in a fragment:
-    assertEquals(CppOptions.class, config.getOptionClass("lipo"));
-    // Unrecognized option:
-    assertNull(config.getOptionClass("do_my_laundry"));
-  }
-
-  @Test
-  public void testGetOptionValue() throws Exception {
+  public void testGetTransitiveOptionDetails() throws Exception {
     // Directly defined options:
-    assertEquals(CompilationMode.DBG, create("-c", "dbg").getOptionValue("compilation_mode"));
-    assertEquals(CompilationMode.OPT, create("-c", "opt").getOptionValue("compilation_mode"));
+    assertEquals(
+        CompilationMode.DBG,
+        create("-c", "dbg").getTransitiveOptionDetails().getOptionValue("compilation_mode"));
+    assertEquals(
+        CompilationMode.OPT,
+        create("-c", "opt").getTransitiveOptionDetails().getOptionValue("compilation_mode"));
 
     // Options defined in a fragment:
-    assertEquals(Boolean.TRUE, create("--force_pic")
-        .getOptionValue("force_pic"));
-    assertEquals(Boolean.FALSE, create("--noforce_pic")
-        .getOptionValue("force_pic"));
+    assertEquals(
+        Boolean.TRUE,
+        create("--force_pic").getTransitiveOptionDetails().getOptionValue("force_pic"));
+    assertEquals(
+        Boolean.FALSE,
+        create("--noforce_pic").getTransitiveOptionDetails().getOptionValue("force_pic"));
 
-    // Unrecognized option:
-    assertNull(create().getOptionValue("do_my_dishes"));
+    // Late-bound default option:
+    BuildConfiguration config = create();
+    assertEquals(
+        config.getTransitiveOptionDetails().getOptionValue("compiler"),
+        config.getFragment(CppConfiguration.class).getCompiler());
 
     // Legitimately null option:
-    assertNull(create().getOptionValue("test_filter"));
+    assertNull(create().getTransitiveOptionDetails().getOptionValue("test_filter"));
   }
 
   @Test
@@ -374,5 +373,61 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
   public void testHostDefine() throws Exception {
     BuildConfiguration cfg = createHost("--define=foo=bar");
     assertThat(cfg.getCommandLineBuildVariables().get("foo")).isEqualTo("bar");
+  }
+
+  /**
+   * Returns a mock config fragment that loads the given label and does nothing else.
+   */
+  private static ConfigurationFragmentFactory createMockFragmentWithLabelDep(final String label) {
+    return new ConfigurationFragmentFactory() {
+      @Override
+      public Fragment create(ConfigurationEnvironment env, BuildOptions buildOptions)
+          throws InvalidConfigurationException, InterruptedException {
+        try {
+          env.getTarget(Label.parseAbsoluteUnchecked(label));
+        } catch (NoSuchPackageException e) {
+          fail("cannot load mock fragment's dep label " + label + ": " + e.getMessage());
+        } catch (NoSuchTargetException e) {
+          fail("cannot load mock fragment's dep label " + label + ": " + e.getMessage());
+        }
+        return new Fragment() {};
+      }
+
+      @Override
+      public Class<? extends Fragment> creates() {
+        return CppConfiguration.class;
+      }
+
+      @Override
+      public ImmutableSet<Class<? extends FragmentOptions>> requiredOptions() {
+        return ImmutableSet.<Class<? extends FragmentOptions>>of();
+      }
+    };
+  }
+
+  @Test
+  public void depLabelCycleOnConfigurationLoading() throws Exception {
+    configurationFactory =
+        new ConfigurationFactory(
+            analysisMock.createConfigurationCollectionFactory(),
+            createMockFragmentWithLabelDep("//foo"));
+    getScratch().file("foo/BUILD",
+        "load('//skylark:one.bzl', 'one')",
+        "cc_library(name = 'foo')");
+    getScratch().file("skylark/BUILD");
+    getScratch().file("skylark/one.bzl",
+        "load('//skylark:two.bzl', 'two')",
+        "def one():",
+        "  pass");
+    getScratch().file("skylark/two.bzl",
+        "load('//skylark:one.bzl', 'one')",
+        "def two():",
+        "  pass");
+    checkError(String.join("\n",
+        "ERROR <no location>: cycle detected in extension files: ",
+        "    foo/BUILD",
+        ".-> //skylark:one.bzl",
+        "|   //skylark:two.bzl",
+        "`-- //skylark:one.bzl"));
   }
 }

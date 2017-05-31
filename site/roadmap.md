@@ -125,26 +125,26 @@ be refined if appropriate.
       <td>P2. <a href="https://github.com/bazelbuild/bazel/commit/7b825b8ea442246aabfa6a5a8962abd70855d0da">Sandboxing of action for OS X</a></td>
     </tr>
     <tr>
-      <td rowspan="4"><b>0.5</b></td>
-      <td rowspan="4"><b>2017&#8209;02</b></td>
+      <td rowspan="5"><b>0.5</b></td>
+      <td rowspan="5"><b>2017&#8209;03</b></td>
       <td>P0. Support for building and testing Java, C++ and Python on Windows</td>
     </tr>
     <tr><td>P1. Initial API for a Build Event Protocol</td></tr>
     <tr><td>P1. Support for coverage for Java</td></tr>
+    <tr><td>P1. Bazel installer optionally bundles the JDK</td></tr>
     <tr><td>P2. Repository rules no longer have invalidation issues</td></tr>
     <tr>
-      <td rowspan="5"><b>0.6</b></td>
-      <td rowspan="5"><b>2017&#8209;03 </b></td>
-      <td>P1. Stable API for Remote execution including platform description</td>
+      <td rowspan="4"><b>0.6</b></td>
+      <td rowspan="4"><b>2017&#8209;06</b></td>
+      <td>P0. Stable API for Remote execution including platform description</td>
     </tr>
-    <tr><td>P1. Release binaries with Java dependencies included in Bazel</td></tr>
-    <tr><td>P1. List of feature to deprecate until version 1.0 are tracked in a publicly available document</td></tr>
-    <tr><td>P2. Bazel on Windows does not need to install MSYS</td></tr>
+    <tr><td>P0. List of feature to deprecate until version 1.0 are tracked in a publicly available document</td></tr>
+    <tr><td>P1. Bazel on Windows does not need to install MSYS</td></tr>
     <tr><td>P2. Bazel can load workspace recursively</td></tr>
     <tr>
       <td rowspan="8"><b>0.7</b></td>
-      <td rowspan="8"><b>2017&#8209;06</b></td>
-      <td>P0. Decouple Skylark rules from Bazel</td>
+      <td rowspan="8"><b>2017&#8209;09</b></td>
+      <td>P0. Skylark is fully documented; strategy for user-provided Skylark rule documentation</td>
     </tr>
     <tr><td>P0. Support for Android integration testing</td></tr>
     <tr><td>P0. Support for Robolectric test for Android</td></tr>
@@ -155,22 +155,22 @@ be refined if appropriate.
     <tr><td>P2. Local caching of build artifacts</td></tr>
     <tr>
       <td rowspan="4"><b>0.8</b></td>
-      <td rowspan="4"><b>2017&#8209;09</b></td>
+      <td rowspan="4"><b>2017&#8209;12</b></td>
       <td>P0. Support for iOS integration testing</td>
     </tr>
     <tr><td>P1. Bazel can build Android application on Windows</td></tr>
     <tr><td>P1. Local caching of external repository is turned on by default and has a deletion strategy</td></tr>
-    <tr><td>P1. Access to native rules functionality from Skylark (<a href-"https://bazel.build/designs/2016/08/04/extensibility-for-native-rules.html">"sandwich"</a>)</td></tr>
+    <tr><td>P1. Access to native rules functionality from Skylark (<a href="https://bazel.build/designs/2016/08/04/extensibility-for-native-rules.html">"sandwich"</a>)</td></tr>
    <tr>
       <td rowspan="2"><b>0.9</b></td>
-      <td rowspan="2"><b>2017&#8209;12</b></td>
+      <td rowspan="2"><b>2018&#8209;03</b></td>
       <td>P0. Full Windows support</td>
     </tr>
     <tr><td>P1. Full test suite is open-sourced</td></tr>
     <tr>
       <td rowspan="7"><b><a name="stable"></a>Stable</b></td>
       <td rowspan="7"><b>1.0</b></td>
-      <td rowspan="7"><b>2018</b></td>
+      <td rowspan="7"><b>2018&#8209;06</b></td>
       <td>P0. APIs are versioned</td>
     </tr>
     <tr><td>P0. Github is primary</td></tr>

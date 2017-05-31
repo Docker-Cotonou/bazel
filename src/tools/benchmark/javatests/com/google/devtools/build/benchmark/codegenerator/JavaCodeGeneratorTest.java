@@ -38,7 +38,12 @@ public class JavaCodeGeneratorTest {
   public void testGenerateNewProject() throws IOException {
     File createdFolder = folder.newFolder("GenerateNewProject");
     Path dir = createdFolder.toPath();
-    JavaCodeGenerator.generateNewProject(dir.toString(), true, true, true, true);
+    JavaCodeGenerator javaCodeGenerator = new JavaCodeGenerator();
+    javaCodeGenerator.generateNewProject(dir.toString(), ImmutableSet.of(
+        JavaCodeGenerator.TARGET_A_FEW_FILES,
+        JavaCodeGenerator.TARGET_LONG_CHAINED_DEPS,
+        JavaCodeGenerator.TARGET_MANY_FILES,
+        JavaCodeGenerator.TARGET_PARALLEL_DEPS));
 
     // Check dir contains 4 project directories
     File[] filesList = dir.toFile().listFiles();
@@ -53,21 +58,23 @@ public class JavaCodeGeneratorTest {
     // Target 1: a few files
     checkProjectPathContains(dir, JavaCodeGenerator.TARGET_A_FEW_FILES);
     checkSimpleTarget(
-        dir, JavaCodeGenerator.TARGET_A_FEW_FILES, JavaCodeGenerator.SIZE_A_FEW_FILES);
+        dir, JavaCodeGenerator.TARGET_A_FEW_FILES, javaCodeGenerator.getSizeAFewFiles());
 
     // Target 2: many files
     checkProjectPathContains(dir, JavaCodeGenerator.TARGET_MANY_FILES);
-    checkSimpleTarget(dir, JavaCodeGenerator.TARGET_MANY_FILES, JavaCodeGenerator.SIZE_MANY_FILES);
+    checkSimpleTarget(
+        dir, JavaCodeGenerator.TARGET_MANY_FILES, javaCodeGenerator.getSizeManyFiles());
 
     // Target 3: long chained deps
     checkProjectPathContains(dir, JavaCodeGenerator.TARGET_LONG_CHAINED_DEPS);
     checkDepsTarget(
-        dir, JavaCodeGenerator.TARGET_LONG_CHAINED_DEPS, JavaCodeGenerator.SIZE_LONG_CHAINED_DEPS);
+        dir, JavaCodeGenerator.TARGET_LONG_CHAINED_DEPS,
+        javaCodeGenerator.getSizeLongChainedDeps());
 
     // Target 4: parallel deps
     checkProjectPathContains(dir, JavaCodeGenerator.TARGET_PARALLEL_DEPS);
     checkDepsTarget(
-        dir, JavaCodeGenerator.TARGET_PARALLEL_DEPS, JavaCodeGenerator.SIZE_PARALLEL_DEPS);
+        dir, JavaCodeGenerator.TARGET_PARALLEL_DEPS, javaCodeGenerator.getSizeParallelDeps());
   }
 
   private static ImmutableSet<String> fileArrayToImmutableSet(File[] files) {

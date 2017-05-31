@@ -1049,6 +1049,102 @@ public class CcToolchainFeaturesTest {
   }
 
   @Test
+  public void testWithFeature_OneSetOneFeature() throws Exception {
+    CcToolchainFeatures features =
+        buildFeatures(
+            "feature {",
+            "  name: 'a'",
+            "  flag_set {",
+            "    with_feature {feature: 'b'}",
+            "    action: 'c++-compile'",
+            "    flag_group {",
+            "      flag: 'dummy_flag'",
+            "    }",
+            "  }",
+            "}",
+            "feature {name: 'b'}");
+    assertThat(
+            features
+                .getFeatureConfiguration("a", "b")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .containsExactly("dummy_flag");
+    assertThat(
+            features
+                .getFeatureConfiguration("a")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .doesNotContain("dummy_flag");
+  }
+
+  @Test
+  public void testWithFeature_OneSetMultipleFeatures() throws Exception {
+    CcToolchainFeatures features =
+        buildFeatures(
+            "feature {",
+            "  name: 'a'",
+            "  flag_set {",
+            "    with_feature {feature: 'b', feature: 'c'}",
+            "    action: 'c++-compile'",
+            "    flag_group {",
+            "      flag: 'dummy_flag'",
+            "    }",
+            "  }",
+            "}",
+            "feature {name: 'b'}",
+            "feature {name: 'c'}");
+    assertThat(
+            features
+                .getFeatureConfiguration("a", "b", "c")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .containsExactly("dummy_flag");
+    assertThat(
+            features
+                .getFeatureConfiguration("a", "b")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .doesNotContain("dummy_flag");
+    assertThat(
+            features
+                .getFeatureConfiguration("a")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .doesNotContain("dummy_flag");
+  }
+
+  @Test
+  public void testWithFeature_MulipleSetsMultipleFeatures() throws Exception {
+    CcToolchainFeatures features =
+        buildFeatures(
+            "feature {",
+            "  name: 'a'",
+            "  flag_set {",
+            "    with_feature {feature: 'b1', feature: 'c1'}",
+            "    with_feature {feature: 'b2', feature: 'c2'}",
+            "    action: 'c++-compile'",
+            "    flag_group {",
+            "      flag: 'dummy_flag'",
+            "    }",
+            "  }",
+            "}",
+            "feature {name: 'b1'}",
+            "feature {name: 'c1'}",
+            "feature {name: 'b2'}",
+            "feature {name: 'c2'}");
+    assertThat(
+            features
+                .getFeatureConfiguration("a", "b1", "c1", "b2", "c2")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .containsExactly("dummy_flag");
+    assertThat(
+            features
+                .getFeatureConfiguration("a", "b1", "c1")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .containsExactly("dummy_flag");
+    assertThat(
+            features
+                .getFeatureConfiguration("a", "b1", "b2")
+                .getCommandLine(CppCompileAction.CPP_COMPILE, createVariables()))
+        .doesNotContain("dummy_flag");
+  }
+
+  @Test
   public void testActivateActionConfigFromFeature() throws Exception {
     CcToolchainFeatures toolchainFeatures =
         buildFeatures(
@@ -1113,7 +1209,7 @@ public class CcToolchainFeaturesTest {
                 "   implies: 'action-a'",
                 "}")
             .getFeatureConfiguration("activates-action-a");
-    PathFragment crosstoolPath = new PathFragment("crosstool/");
+    PathFragment crosstoolPath = PathFragment.create("crosstool/");
     PathFragment toolPath = configuration.getToolForAction("action-a").getToolPath(crosstoolPath);
     assertThat(toolPath.toString()).isEqualTo("crosstool/toolchain/a");
   }
@@ -1155,7 +1251,7 @@ public class CcToolchainFeaturesTest {
             "  implies: 'action-a'",
             "}");
 
-    PathFragment crosstoolPath = new PathFragment("crosstool/");
+    PathFragment crosstoolPath = PathFragment.create("crosstool/");
 
     FeatureConfiguration featureAConfiguration =
         toolchainFeatures.getFeatureConfiguration("feature-a", "activates-action-a");
@@ -1214,7 +1310,7 @@ public class CcToolchainFeaturesTest {
             "  implies: 'action-a'",
             "}");
 
-    PathFragment crosstoolPath = new PathFragment("crosstool/");
+    PathFragment crosstoolPath = PathFragment.create("crosstool/");
 
     FeatureConfiguration noFeaturesConfiguration =
         toolchainFeatures.getFeatureConfiguration("activates-action-a");
@@ -1348,12 +1444,12 @@ public class CcToolchainFeaturesTest {
   @Test
   public void testLibraryToLinkValue() {
     assertThat(
-            LibraryToLinkValue.forDynamicLibrary("foo", false)
+            LibraryToLinkValue.forDynamicLibrary("foo")
                 .getFieldValue("LibraryToLinkValue", LibraryToLinkValue.NAME_FIELD_NAME)
                 .getStringValue(LibraryToLinkValue.NAME_FIELD_NAME))
         .isEqualTo("foo");
     assertThat(
-            LibraryToLinkValue.forDynamicLibrary("foo", false)
+            LibraryToLinkValue.forDynamicLibrary("foo")
                 .getFieldValue("LibraryToLinkValue", LibraryToLinkValue.OBJECT_FILES_FIELD_NAME))
         .isNull();
 

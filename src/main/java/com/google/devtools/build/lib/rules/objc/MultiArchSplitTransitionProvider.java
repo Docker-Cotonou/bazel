@@ -14,11 +14,13 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 import static com.google.devtools.build.lib.syntax.Type.STRING;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Optional;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -29,6 +31,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
+import com.google.devtools.build.lib.rules.apple.DottedVersion;
 import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.apple.Platform.PlatformType;
 import com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.MultiArchPlatformRule;
@@ -44,13 +47,19 @@ public class MultiArchSplitTransitionProvider implements SplitTransitionProvider
   static final String UNSUPPORTED_PLATFORM_TYPE_ERROR_FORMAT =
       "Unsupported platform type \"%s\"";
   
+  @VisibleForTesting
+  static final String INVALID_VERSION_STRING_ERROR_FORMAT =
+      "Invalid version string \"%s\". Version must be of the form 'x.y' without alphabetic "
+          + "characters, such as '4.3'.";
+
+  private static final String EXTENSION_COPT = "-application-extension";
   private static final ImmutableSet<PlatformType> SUPPORTED_PLATFORM_TYPES =
       ImmutableSet.of(
           PlatformType.IOS, PlatformType.WATCHOS, PlatformType.TVOS, PlatformType.MACOS);
 
   /**
    * Returns the apple platform type in the current rule context.
-   * 
+   *
    * @throws RuleErrorException if the platform type attribute in the current rulecontext is
    *     an invalid value
    */
@@ -62,6 +71,30 @@ public class MultiArchSplitTransitionProvider implements SplitTransitionProvider
     } catch (IllegalArgumentException exception) {
       throw ruleContext.throwWithAttributeError(MultiArchPlatformRule.PLATFORM_TYPE_ATTR_NAME,
           String.format(UNSUPPORTED_PLATFORM_TYPE_ERROR_FORMAT, attributeValue));
+    }
+  }
+
+  /**
+   * Validates that minimum OS was set to a valid value on the current rule.
+    
+   * @throws RuleErrorException if the platform type attribute in the current rulecontext is
+   *     an invalid value
+   */
+  public static void validateMinimumOs(RuleContext ruleContext) throws RuleErrorException {
+    String attributeValue =
+        ruleContext.attributes().get(MultiArchPlatformRule.MINIMUM_OS_VERSION, STRING);
+    // TODO(b/37096178): This should be a mandatory attribute.
+    if (!Strings.isNullOrEmpty(attributeValue)) {
+      try {
+        DottedVersion minimumOsVersion = DottedVersion.fromString(attributeValue);
+        if (minimumOsVersion.hasAlphabeticCharacters() || minimumOsVersion.numComponents() > 2) {
+          throw ruleContext.throwWithAttributeError(MultiArchPlatformRule.MINIMUM_OS_VERSION,
+              String.format(INVALID_VERSION_STRING_ERROR_FORMAT, attributeValue));
+        }
+      } catch (IllegalArgumentException exception) {
+        throw ruleContext.throwWithAttributeError(MultiArchPlatformRule.MINIMUM_OS_VERSION,
+            String.format(INVALID_VERSION_STRING_ERROR_FORMAT, attributeValue));
+      }
     }
   }
 
@@ -82,38 +115,34 @@ public class MultiArchSplitTransitionProvider implements SplitTransitionProvider
     }
   }
 
-  private static final ImmutableMap<PlatformType, AppleBinaryTransition> SPLIT_TRANSITIONS_BY_TYPE =
-      ImmutableMap.<PlatformType, AppleBinaryTransition>builder()
-          .put(PlatformType.IOS, new AppleBinaryTransition(PlatformType.IOS))
-          .put(PlatformType.WATCHOS, new AppleBinaryTransition(PlatformType.WATCHOS))
-          .put(PlatformType.TVOS, new AppleBinaryTransition(PlatformType.TVOS))
-          .put(PlatformType.MACOS, new AppleBinaryTransition(PlatformType.MACOS))
-          .build();
-
   @Override
   public SplitTransition<?> apply(Rule fromRule) {
-    String platformTypeString = NonconfigurableAttributeMapper.of(fromRule)
-        .get(MultiArchPlatformRule.PLATFORM_TYPE_ATTR_NAME, STRING);
+    NonconfigurableAttributeMapper attrMapper = NonconfigurableAttributeMapper.of(fromRule);
+    String platformTypeString = 
+        attrMapper.get(MultiArchPlatformRule.PLATFORM_TYPE_ATTR_NAME, STRING);
+    String minimumOsVersionString = 
+        attrMapper.get(MultiArchPlatformRule.MINIMUM_OS_VERSION, STRING);
+    boolean isExtension = attrMapper.has(AppleBinaryRule.EXTENSION_SAFE_ATTR_NAME, BOOLEAN)
+        && attrMapper.get(AppleBinaryRule.EXTENSION_SAFE_ATTR_NAME, BOOLEAN);
     PlatformType platformType;
+    Optional<DottedVersion> minimumOsVersion;
     try {
       platformType = getPlatformType(platformTypeString);
+      // TODO(b/37096178): This should be a mandatory attribute.
+      if (Strings.isNullOrEmpty(minimumOsVersionString)) {
+        minimumOsVersion = Optional.absent();
+      } else {
+        minimumOsVersion = Optional.of(DottedVersion.fromString(minimumOsVersionString));
+      }
     } catch (IllegalArgumentException exception) {
       // There's no opportunity to propagate exception information up cleanly at the transition
       // provider level. This should later be registered as a rule error during the initialization
       // of the rule.
       platformType = PlatformType.IOS;
+      minimumOsVersion = Optional.absent();
     }
 
-    return SPLIT_TRANSITIONS_BY_TYPE.get(platformType);
-  }
-
-  /**
-   * Returns the full list of potential split transitions this split transition provider may
-   * produce.
-   */
-  public static List<SplitTransition<BuildOptions>> getPotentialSplitTransitions() {
-    return ImmutableList.<SplitTransition<BuildOptions>>copyOf(
-        SPLIT_TRANSITIONS_BY_TYPE.values());
+    return new AppleBinaryTransition(platformType, minimumOsVersion, isExtension);
   }
 
   /**
@@ -124,55 +153,91 @@ public class MultiArchSplitTransitionProvider implements SplitTransitionProvider
   protected static class AppleBinaryTransition implements SplitTransition<BuildOptions> {
 
     private final PlatformType platformType;
+    // TODO(b/37096178): This should be a mandatory attribute.
+    private final Optional<DottedVersion> minimumOsVersion;
+    private final boolean isExtension;
 
-    public AppleBinaryTransition(PlatformType platformType) {
+    public AppleBinaryTransition(PlatformType platformType,
+        Optional<DottedVersion> minimumOsVersion,
+        boolean isExtension) {
       this.platformType = platformType;
+      this.minimumOsVersion = minimumOsVersion;
+      this.isExtension = isExtension;
     }
 
     @Override
     public final List<BuildOptions> split(BuildOptions buildOptions) {
       List<String> cpus;
+      DottedVersion actualMinimumOsVersion;
       ConfigurationDistinguisher configurationDistinguisher;
       switch (platformType) {
         case IOS:
           cpus = buildOptions.get(AppleCommandLineOptions.class).iosMultiCpus;
-          configurationDistinguisher = ConfigurationDistinguisher.APPLEBIN_IOS;
+          if (cpus.isEmpty()) {
+            cpus = ImmutableList.of(buildOptions.get(AppleCommandLineOptions.class).iosCpu);
+          }
+          configurationDistinguisher = isExtension
+              ? ConfigurationDistinguisher.APPLEBIN_IOS_EXT
+              : ConfigurationDistinguisher.APPLEBIN_IOS;
+          actualMinimumOsVersion = minimumOsVersion.isPresent() ? minimumOsVersion.get()
+              : buildOptions.get(AppleCommandLineOptions.class).iosMinimumOs;
           break;
         case WATCHOS:
           cpus = buildOptions.get(AppleCommandLineOptions.class).watchosCpus;
           if (cpus.isEmpty()) {
             cpus = ImmutableList.of(AppleCommandLineOptions.DEFAULT_WATCHOS_CPU);
           }
-          configurationDistinguisher = ConfigurationDistinguisher.APPLEBIN_WATCHOS;
+          configurationDistinguisher = isExtension
+              ? ConfigurationDistinguisher.APPLEBIN_WATCHOS_EXT
+              : ConfigurationDistinguisher.APPLEBIN_WATCHOS;
+          actualMinimumOsVersion = minimumOsVersion.isPresent() ? minimumOsVersion.get()
+              : buildOptions.get(AppleCommandLineOptions.class).watchosMinimumOs;
           break;
         case TVOS:
           cpus = buildOptions.get(AppleCommandLineOptions.class).tvosCpus;
           if (cpus.isEmpty()) {
             cpus = ImmutableList.of(AppleCommandLineOptions.DEFAULT_TVOS_CPU);
           }
-          configurationDistinguisher = ConfigurationDistinguisher.APPLEBIN_TVOS;
+          configurationDistinguisher = isExtension
+              ? ConfigurationDistinguisher.APPLEBIN_TVOS_EXT
+              : ConfigurationDistinguisher.APPLEBIN_TVOS;
+          actualMinimumOsVersion = minimumOsVersion.isPresent() ? minimumOsVersion.get()
+              : buildOptions.get(AppleCommandLineOptions.class).tvosMinimumOs;
           break;
         case MACOS:
           cpus = buildOptions.get(AppleCommandLineOptions.class).macosCpus;
           if (cpus.isEmpty()) {
             cpus = ImmutableList.of(AppleCommandLineOptions.DEFAULT_MACOS_CPU);
           }
-          configurationDistinguisher = ConfigurationDistinguisher.APPLEBIN_MACOS;
+          configurationDistinguisher = isExtension
+              ? ConfigurationDistinguisher.APPLEBIN_MACOS_EXT
+              : ConfigurationDistinguisher.APPLEBIN_MACOS;
+          actualMinimumOsVersion = minimumOsVersion.isPresent() ? minimumOsVersion.get()
+              : buildOptions.get(AppleCommandLineOptions.class).macosMinimumOs;
           break;
         default:
           throw new IllegalArgumentException("Unsupported platform type " + platformType);
       }
 
+      List<String> copts = buildOptions.get(ObjcCommandLineOptions.class).copts;
+      if (isExtension && !copts.contains(EXTENSION_COPT)) {
+        copts = ImmutableList.<String>builder()
+            .addAll(copts).add(EXTENSION_COPT).build();
+      }
       ImmutableList.Builder<BuildOptions> splitBuildOptions = ImmutableList.builder();
       for (String cpu : cpus) {
         BuildOptions splitOptions = buildOptions.clone();
+        splitOptions.get(ObjcCommandLineOptions.class).copts = copts;
 
-        splitOptions.get(AppleCommandLineOptions.class).applePlatformType = platformType;
-        splitOptions.get(AppleCommandLineOptions.class).appleSplitCpu = cpu;
+        AppleCommandLineOptions appleCommandLineOptions =
+            splitOptions.get(AppleCommandLineOptions.class);
+
+        appleCommandLineOptions.applePlatformType = platformType;
+        appleCommandLineOptions.appleSplitCpu = cpu;
         // If the new configuration does not use the apple crosstool, then it needs ios_cpu to be
         // to decide architecture.
         // TODO(b/29355778, b/28403953): Use a crosstool for any apple rule. Deprecate ios_cpu.
-        splitOptions.get(AppleCommandLineOptions.class).iosCpu = cpu;
+        appleCommandLineOptions.iosCpu = cpu;
   
         if (splitOptions.get(ObjcCommandLineOptions.class).enableCcDeps) {
           // Only set the (CC-compilation) CPU for dependencies if explicitly required by the user.
@@ -183,8 +248,22 @@ public class MultiArchSplitTransitionProvider implements SplitTransitionProvider
           AppleCrosstoolTransition.setAppleCrosstoolTransitionConfiguration(buildOptions,
               splitOptions, platformCpu);
         }
-        splitOptions.get(AppleCommandLineOptions.class).configurationDistinguisher =
-            configurationDistinguisher;
+        switch (platformType) {
+          case IOS:
+            appleCommandLineOptions.iosMinimumOs = actualMinimumOsVersion;
+            break;
+          case WATCHOS:
+            appleCommandLineOptions.watchosMinimumOs = actualMinimumOsVersion;
+            break;
+          case TVOS:
+            appleCommandLineOptions.tvosMinimumOs = actualMinimumOsVersion;
+            break;
+          case MACOS:
+            appleCommandLineOptions.macosMinimumOs = actualMinimumOsVersion;
+            break;
+        }
+
+        appleCommandLineOptions.configurationDistinguisher = configurationDistinguisher;
         splitBuildOptions.add(splitOptions);
       }
       return splitBuildOptions.build();

@@ -24,14 +24,18 @@
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <unistd.h>
-#endif  // not COMPILER_MSVC
+#endif  // COMPILER_MSVC
 
 #include <windows.h>
-#include <lmcons.h>  // UNLEN
+#include <lmcons.h>          // UNLEN
+#include <versionhelpers.h>  // IsWindows8OrGreater
 
 #ifdef COMPILER_MSVC
-#include <io.h>  // _open
-#endif  // COMPILER_MSVC
+#include <io.h>            // _open
+#include <knownfolders.h>  // FOLDERID_Profile
+#include <objbase.h>       // CoTaskMemFree
+#include <shlobj.h>        // SHGetKnownFolderPath
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -105,13 +109,43 @@ class WindowsClock {
 
 #ifdef COMPILER_MSVC
 
+BOOL WINAPI ConsoleCtrlHandler(_In_ DWORD ctrlType) {
+  static volatile int sigint_count = 0;
+  switch (ctrlType) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+      if (++sigint_count >= 3) {
+        SigPrintf(
+            "\n%s caught third Ctrl+C handler signal; killed.\n\n",
+            SignalHandler::Get().GetGlobals()->options->product_name.c_str());
+        if (SignalHandler::Get().GetGlobals()->server_pid != -1) {
+          KillServerProcess(SignalHandler::Get().GetGlobals()->server_pid);
+        }
+        _exit(1);
+      }
+      SigPrintf(
+          "\n%s Ctrl+C handler; shutting down.\n\n",
+          SignalHandler::Get().GetGlobals()->options->product_name.c_str());
+      SignalHandler::Get().CancelServer();
+      return TRUE;
+
+    case CTRL_CLOSE_EVENT:
+      SignalHandler::Get().CancelServer();
+      return TRUE;
+  }
+  return false;
+}
+
 void SignalHandler::Install(GlobalVariables* globals,
                             SignalHandler::Callback cancel_server) {
-  // TODO(bazel-team): implement this.
+  _globals = globals;
+  _cancel_server = cancel_server;
+  ::SetConsoleCtrlHandler(&ConsoleCtrlHandler, TRUE);
 }
 
 ATTRIBUTE_NORETURN void SignalHandler::PropagateSignalOrExit(int exit_code) {
-  // TODO(bazel-team): implement this.
+  // We do not handle signals on Windows; always exit with exit_code.
+  exit(exit_code);
 }
 
 #else  // not COMPILER_MSVC
@@ -205,17 +239,18 @@ ATTRIBUTE_NORETURN void SignalHandler::PropagateSignalOrExit(int exit_code) {
 // in case the Blaze server has written a partial line.
 void SigPrintf(const char *format, ...) {
 #ifdef COMPILER_MSVC
-  // TODO(bazel-team): implement this.
+  int stderr_fileno = _fileno(stderr);
 #else  // not COMPILER_MSVC
+  int stderr_fileno = STDERR_FILENO;
+#endif
   char buf[1024];
   va_list ap;
   va_start(ap, format);
   int r = vsnprintf(buf, sizeof buf, format, ap);
   va_end(ap);
-  if (write(STDERR_FILENO, buf, r) <= 0) {
+  if (write(stderr_fileno, buf, r) <= 0) {
     // We don't care, just placate the compiler.
   }
-#endif  // COMPILER_MSVC
 }
 
 static void PrintError(const string& op) {
@@ -303,9 +338,22 @@ string GetOutputRoot() {
 #endif  // COMPILER_MSVC
 }
 
+string GetHomeDir() {
+#ifdef COMPILER_MSVC
+  PWSTR wpath;
+  if (SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_Profile, KF_FLAG_DEFAULT, NULL,
+                                       &wpath))) {
+    string result = string(blaze_util::WstringToCstring(wpath).get());
+    ::CoTaskMemFree(wpath);
+    return result;
+  }
+#endif
+  return GetEnv("HOME");  // only defined in MSYS/Cygwin
+}
+
 string FindSystemWideBlazerc() {
 #ifdef COMPILER_MSVC
-  // TODO(bazel-team): implement this.
+  // TODO(bazel-team): figure out a good path to return here.
   return "";
 #else   // not COMPILER_MSVC
   string path = "/etc/bazel.bazelrc";
@@ -453,7 +501,7 @@ string GetJvmVersion(const string& java_exe) {
   HANDLE pipe_read, pipe_write;
 
   SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
-  if (!CreatePipe(&pipe_read, &pipe_write, &sa, 0)) {
+  if (!::CreatePipe(&pipe_read, &pipe_write, &sa, 0)) {
     pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "CreatePipe");
   }
 
@@ -548,6 +596,100 @@ static bool DaemonizeOnWindows() {
 }
 #endif  // not COMPILER_MSVC
 
+static bool GetProcessStartupTime(HANDLE process, uint64_t* result) {
+  FILETIME creation_time, dummy1, dummy2, dummy3;
+  // GetProcessTimes cannot handle NULL arguments.
+  if (process == INVALID_HANDLE_VALUE ||
+      !::GetProcessTimes(process, &creation_time, &dummy1, &dummy2, &dummy3)) {
+    return false;
+  }
+  *result = static_cast<uint64_t>(creation_time.dwHighDateTime) << 32 |
+            creation_time.dwLowDateTime;
+  return true;
+}
+
+static void WriteProcessStartupTime(const string& server_dir, HANDLE process) {
+  uint64_t start_time = 0;
+  if (!GetProcessStartupTime(process, &start_time)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "Cannot get start time of process in server dir %s",
+         server_dir.c_str());
+  }
+
+  string start_time_file = blaze_util::JoinPath(server_dir, "server.starttime");
+  if (!blaze_util::WriteFile(ToString(start_time), start_time_file)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "Cannot write start time in server dir %s", server_dir.c_str());
+  }
+}
+
+static HANDLE CreateJvmOutputFile(const wstring& path,
+                                  SECURITY_ATTRIBUTES* sa) {
+  // If the previous server process was asked to be shut down (but not killed),
+  // it takes a while for it to comply, so wait until the JVM output file that
+  // it held open is closed. There seems to be no better way to wait for a file
+  // to be closed on Windows.
+  static const unsigned int timeout_sec = 60;
+  for (unsigned int waited = 0; waited < timeout_sec; ++waited) {
+    HANDLE handle = ::CreateFileW(
+        /* lpFileName */ path.c_str(),
+        /* dwDesiredAccess */ GENERIC_READ | GENERIC_WRITE,
+        // TODO(laszlocsomor): add FILE_SHARE_DELETE, that allows deleting
+        // jvm.out and maybe fixes
+        // https://github.com/bazelbuild/bazel/issues/2326 . Unfortunately
+        // however if a file that we opened with FILE_SHARE_DELETE is deleted
+        // while its still open, write operations will still succeed but have no
+        // effect, the file won't be recreated. (I haven't tried what happens
+        // with read operations.)
+        //
+        // FILE_SHARE_READ: So that the file can be read while the server is
+        // running
+        /* dwShareMode */ FILE_SHARE_READ,
+        /* lpSecurityAttributes */ sa,
+        /* dwCreationDisposition */ CREATE_ALWAYS,
+        /* dwFlagsAndAttributes */ FILE_ATTRIBUTE_NORMAL,
+        /* hTemplateFile */ NULL);
+    if (handle != INVALID_HANDLE_VALUE) {
+      return handle;
+    }
+    if (GetLastError() != ERROR_SHARING_VIOLATION &&
+        GetLastError() != ERROR_LOCK_VIOLATION) {
+      // Some other error occurred than the file being open; bail out.
+      break;
+    }
+
+    // The file is still held open, the server is shutting down. There's a
+    // chance that another process holds it open, we don't know; in that case
+    // we just exit after the timeout expires.
+    if (waited == 5 || waited == 10 || waited == 30) {
+      fprintf(stderr,
+              "Waiting for previous Bazel server's log file to close "
+              "(waited %d seconds, waiting at most %d)\n",
+              waited, timeout_sec);
+    }
+    Sleep(1000);
+  }
+  return INVALID_HANDLE_VALUE;
+}
+
+#ifdef COMPILER_MSVC
+
+class ProcessHandleBlazeServerStartup : public BlazeServerStartup {
+ public:
+  ProcessHandleBlazeServerStartup(HANDLE _proc) : proc(_proc) {}
+
+  bool IsStillAlive() override {
+    FILETIME dummy1, exit_time, dummy2, dummy3;
+    return GetProcessTimes(proc, &dummy1, &exit_time, &dummy2, &dummy3) &&
+           exit_time.dwHighDateTime == 0 && exit_time.dwLowDateTime == 0;
+  }
+
+ private:
+  windows_util::AutoHandle proc;
+};
+
+#else  // COMPILER_MSVC
+
 // Keeping an eye on the server process on Windows is not implemented yet.
 // TODO(lberki): Implement this, because otherwise if we can't start up a server
 // process, the client will hang until it times out.
@@ -558,18 +700,18 @@ class DummyBlazeServerStartup : public BlazeServerStartup {
   virtual bool IsStillAlive() { return true; }
 };
 
+#endif  // COMPILER_MSVC
+
 void ExecuteDaemon(const string& exe, const std::vector<string>& args_vector,
                    const string& daemon_output, const string& server_dir,
                    BlazeServerStartup** server_startup) {
-#ifdef COMPILER_MSVC
-  *server_startup = new DummyBlazeServerStartup();
-#else   // not COMPILER_MSVC
+#ifndef COMPILER_MSVC
   if (DaemonizeOnWindows()) {
     // We are the client process
     *server_startup = new DummyBlazeServerStartup();
     return;
   }
-#endif  // COMPILER_MSVC
+#endif  // not COMPILER_MSVC
 
   wstring wdaemon_output;
   if (!blaze_util::AsWindowsPathWithUncPrefix(daemon_output, &wdaemon_output)) {
@@ -579,54 +721,38 @@ void ExecuteDaemon(const string& exe, const std::vector<string>& args_vector,
 
   SECURITY_ATTRIBUTES sa;
   sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-  // We redirect stdout and stderr by telling CreateProcess to use a file handle
-  // we open below and these handles must be inheriatable
+  // We redirect stdin to the NUL device, and redirect stdout and stderr to
+  // `output_file` (opened below) by telling CreateProcess to use these file
+  // handles, so they must be inheritable.
   sa.bInheritHandle = TRUE;
   sa.lpSecurityDescriptor = NULL;
 
-  HANDLE output_file = ::CreateFileW(
-      /* lpFileName */ wdaemon_output.c_str(),
-      /* dwDesiredAccess */ GENERIC_READ | GENERIC_WRITE,
-      // TODO(laszlocsomor): add FILE_SHARE_DELETE, that allows deleting jvm.out
-      // and maybe fixes https://github.com/bazelbuild/bazel/issues/2326 .
-      // Unfortunately however if a file that we opened with FILE_SHARE_DELETE
-      // is deleted while its still open, write operations will still succeed
-      // but have no effect, the file won't be recreated. (I haven't tried what
-      // happens with read operations.)
-      //
-      // FILE_SHARE_READ: So that the file can be read while the server is
-      // running
-      /* dwShareMode */ FILE_SHARE_READ,
-      /* lpSecurityAttributes */ &sa,
-      /* dwCreationDisposition */ CREATE_ALWAYS,
-      /* dwFlagsAndAttributes */ FILE_ATTRIBUTE_NORMAL,
-      /* hTemplateFile */ NULL);
-
-  if (output_file == INVALID_HANDLE_VALUE) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "CreateFile");
+  windows_util::AutoHandle devnull(
+      ::CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL));
+  if (!devnull.IsValid()) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "ExecuteDaemon: Could not open NUL device");
   }
 
-  HANDLE pipe_read, pipe_write;
-  if (!CreatePipe(&pipe_read, &pipe_write, &sa, 0)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "CreatePipe");
-  }
-
-  if (!SetHandleInformation(pipe_write, HANDLE_FLAG_INHERIT, 0)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "SetHandleInformation");
+  windows_util::AutoHandle output_file(
+      CreateJvmOutputFile(wdaemon_output.c_str(), &sa));
+  if (!output_file.IsValid()) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "ExecuteDaemon: CreateJvmOutputFile %ls", wdaemon_output.c_str());
   }
 
   PROCESS_INFORMATION processInfo = {0};
   STARTUPINFOA startupInfo = {0};
 
-  startupInfo.hStdInput = pipe_read;
+  startupInfo.hStdInput = devnull;
   startupInfo.hStdError = output_file;
   startupInfo.hStdOutput = output_file;
   startupInfo.dwFlags |= STARTF_USESTDHANDLES;
   CmdLine cmdline;
   CreateCommandLine(&cmdline, exe, args_vector);
-
   // Propagate BAZEL_SH environment variable to a sub-process.
-  // todo(dslomov): More principled approach to propagating
+  // TODO(dslomov): More principled approach to propagating
   // environment variables.
   SetEnvironmentVariableA("BAZEL_SH", getenv("BAZEL_SH"));
 
@@ -648,9 +774,12 @@ void ExecuteDaemon(const string& exe, const std::vector<string>& args_vector,
          GetLastError(), cmdline.cmdline);
   }
 
-  CloseHandle(output_file);
-  CloseHandle(pipe_write);
-  CloseHandle(pipe_read);
+  WriteProcessStartupTime(server_dir, processInfo.hProcess);
+
+#ifdef COMPILER_MSVC
+  // Pass ownership of processInfo.hProcess
+  *server_startup = new ProcessHandleBlazeServerStartup(processInfo.hProcess);
+#endif
 
   string pid_string = ToString(processInfo.dwProcessId);
   string pid_file = blaze_util::JoinPath(server_dir, kServerPidFile);
@@ -659,7 +788,8 @@ void ExecuteDaemon(const string& exe, const std::vector<string>& args_vector,
     fprintf(stderr, "Cannot write PID file %s\n", pid_file.c_str());
   }
 
-  CloseHandle(processInfo.hProcess);
+  // Don't close processInfo.hProcess here, it's now owned by the
+  // ProcessHandleBlazeServerStartup instance.
   CloseHandle(processInfo.hThread);
 
 #ifndef COMPILER_MSVC
@@ -702,16 +832,7 @@ static bool IsFailureDueToNestedJobsNotSupported(HANDLE process) {
     // Not in a job.
     return false;
   }
-
-  OSVERSIONINFOEX version_info;
-  version_info.dwOSVersionInfoSize = sizeof(version_info);
-  if (!GetVersionEx(reinterpret_cast<OSVERSIONINFO*>(&version_info))) {
-    PrintError("GetVersionEx()");
-    return false;
-  }
-
-  return version_info.dwMajorVersion < 6
-      || version_info.dwMajorVersion == 6 && version_info.dwMinorVersion <= 1;
+  return !IsWindows8OrGreater();
 }
 
 // Run the given program in the current working directory, using the given
@@ -802,7 +923,7 @@ void ExecuteProgram(const string& exe, const std::vector<string>& args_vector) {
   exit(exit_code);
 }
 
-string ListSeparator() { return ";"; }
+const char kListSeparator = ';';
 
 string PathAsJvmFlag(const string& path) {
   string spath;
@@ -818,20 +939,26 @@ string PathAsJvmFlag(const string& path) {
 
 string ConvertPath(const string& path) {
 #ifdef COMPILER_MSVC
-  // This isn't needed when the binary isn't linked against msys-2.0.dll (when
-  // we build with MSVC): MSYS converts all Unix paths to Windows paths for such
-  // binaries.
-  return path;
+  // The path may not be Windows-style and may not be normalized, so convert it.
+  wstring wpath;
+  if (!blaze_util::AsWindowsPathWithUncPrefix(path, &wpath)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "ConvertPath(path=%s)",
+         path.c_str());
+  }
+  std::transform(wpath.begin(), wpath.end(), wpath.begin(), ::towlower);
+  return string(blaze_util::WstringToCstring(wpath.c_str()).get());
 #else  // not COMPILER_MSVC
   // If the path looks like %USERPROFILE%/foo/bar, don't convert.
   if (path.empty() || path[0] == '%') {
-    return path;
+    // It's fine to convert to lower-case even if the path contains environment
+    // variable names, since Windows can look them up case-insensitively.
+    return blaze_util::AsLower(path);
   }
   char* wpath = static_cast<char*>(cygwin_create_path(
       CCP_POSIX_TO_WIN_A, static_cast<const void*>(path.c_str())));
   string result(wpath);
   free(wpath);
-  return result;
+  return blaze_util::AsLower(result);
 #endif  // COMPILER_MSVC
 }
 
@@ -856,35 +983,6 @@ string ConvertPathList(const string& path_list) {
 #endif  // COMPILER_MSVC
 }
 
-static string ConvertPathToPosix(const string& win_path) {
-#ifdef COMPILER_MSVC
-  // TODO(bazel-team) 2016-11-18: verify that this function is not needed on
-  // Windows.
-  return win_path;
-#else   // not COMPILER_MSVC
-  char* posix_path = static_cast<char*>(cygwin_create_path(
-      CCP_WIN_A_TO_POSIX, static_cast<const void*>(win_path.c_str())));
-  string result(posix_path);
-  free(posix_path);
-  return result;
-#endif  // COMPILER_MSVC
-}
-
-// Cribbed from ntifs.h, not present in windows.h
-
-#define REPARSE_MOUNTPOINT_HEADER_SIZE   8
-
-typedef struct {
-  DWORD ReparseTag;
-  WORD ReparseDataLength;
-  WORD Reserved;
-  WORD SubstituteNameOffset;
-  WORD SubstituteNameLength;
-  WORD PrintNameOffset;
-  WORD PrintNameLength;
-  WCHAR PathBuffer[ANYSIZE_ARRAY];
-} REPARSE_MOUNTPOINT_DATA_BUFFER, *PREPARSE_MOUNTPOINT_DATA_BUFFER;
-
 bool SymlinkDirectories(const string &posix_target, const string &posix_name) {
   wstring name;
   wstring target;
@@ -907,95 +1005,53 @@ bool SymlinkDirectories(const string &posix_target, const string &posix_name) {
   return true;
 }
 
-// TODO(laszlocsomor): use JunctionResolver in file_windows.cc
-bool ReadDirectorySymlink(const string &posix_name, string* result) {
-  string name = ConvertPath(posix_name);
-  wstring wname;
-
-  if (!blaze_util::AsWindowsPathWithUncPrefix(name, &wname)) {
-    PrintError("ReadDirectorySymlink: AsWindowsPathWithUncPrefix(" + name +
-               ")");
-    return false;
-  }
-
-  HANDLE directory = windows_util::OpenDirectory(wname.c_str(), false);
-  if (directory == INVALID_HANDLE_VALUE) {
-    return false;
-  }
-
-  char reparse_buffer_bytes[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
-  REPARSE_MOUNTPOINT_DATA_BUFFER* reparse_buffer =
-      reinterpret_cast<REPARSE_MOUNTPOINT_DATA_BUFFER *>(reparse_buffer_bytes);
-  memset(reparse_buffer_bytes, 0, MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
-  reparse_buffer->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
-  DWORD bytes_returned;
-  bool ok = ::DeviceIoControl(
-      directory,
-      FSCTL_GET_REPARSE_POINT,
-      NULL,
-      0,
-      reparse_buffer,
-      MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
-      &bytes_returned,
-      NULL);
-  if (!ok) {
-    PrintError("DeviceIoControl(FSCTL_GET_REPARSE_POINT, " + name + ")");
-  }
-
-  CloseHandle(directory);
-  if (!ok) {
-    return false;
-  }
-
-  std::vector<char> print_name(reparse_buffer->PrintNameLength * sizeof(WCHAR) +
-                               1);
-  int count = ::WideCharToMultiByte(
-      CP_UTF8,
-      0,
-      reparse_buffer->PathBuffer +
-         (reparse_buffer->PrintNameOffset / sizeof(WCHAR)),
-      reparse_buffer->PrintNameLength,
-      &print_name[0],
-      print_name.size(),
-      NULL,
-      NULL);
-  if (count == 0) {
-    PrintError("WideCharToMultiByte()");
-    *result = "";
-    return false;
-  } else {
-    *result = ConvertPathToPosix(&print_name[0]);
-    return true;
-  }
-}
-
 bool CompareAbsolutePaths(const string& a, const string& b) {
-  // `a` and `b` may not be Windows-style and may not be normalized, so convert
-  // them both before comparing them.
-  wstring a_real, b_real;
-  if (!blaze_util::AsWindowsPathWithUncPrefix(a, &a_real)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "CompareAbsolutePaths(a=%s, b=%s)", a.c_str(), b.c_str());
-  }
-  if (!blaze_util::AsWindowsPathWithUncPrefix(b, &b_real)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "CompareAbsolutePaths(a=%s, b=%s)", a.c_str(), b.c_str());
-  }
-  return a_real == b_real;
+  return ConvertPath(a) == ConvertPath(b);
 }
 
+#ifndef STILL_ACTIVE
+#define STILL_ACTIVE (259)  // From MSDN about GetExitCodeProcess.
+#endif
+
+// On Windows (and Linux) we use a combination of PID and start time to identify
+// the server process. That is supposed to be unique unless one can start more
+// processes than there are PIDs available within a single jiffy.
 bool VerifyServerProcess(
     int pid, const string& output_base, const string& install_base) {
-  // TODO(lberki): This might accidentally kill an unrelated process if the
-  // server died and the PID got reused.
-  return true;
+  windows_util::AutoHandle process(
+      ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+  if (!process.IsValid()) {
+    // Cannot find the server process. Can happen if the PID file is stale.
+    return false;
+  }
+
+  DWORD exit_code = 0;
+  uint64_t start_time = 0;
+  if (!::GetExitCodeProcess(process, &exit_code) || exit_code != STILL_ACTIVE ||
+      !GetProcessStartupTime(process, &start_time)) {
+    // Process doesn't exist or died meantime, all is good. No stale server is
+    // present.
+    return false;
+  }
+
+  string recorded_start_time;
+  bool file_present = blaze_util::ReadFile(
+      blaze_util::JoinPath(output_base, "server/server.starttime"),
+      &recorded_start_time);
+
+  // If start time file got deleted, but PID file didn't, assume that this is an
+  // old Bazel process that doesn't know how to write start time files yet.
+  return !file_present || recorded_start_time == ToString(start_time);
 }
 
 bool KillServerProcess(int pid) {
-  HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-  if (process == NULL) {
-    // Cannot find the server process. Can happen if the PID file is stale.
+  windows_util::AutoHandle process(::OpenProcess(
+      PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+  DWORD exitcode = 0;
+  if (!process.IsValid() || !::GetExitCodeProcess(process, &exitcode) ||
+      exitcode != STILL_ACTIVE) {
+    // Cannot find the server process (can happen if the PID file is stale) or
+    // it already exited.
     return false;
   }
 
@@ -1003,8 +1059,6 @@ bool KillServerProcess(int pid) {
   if (!result) {
     blaze_util::PrintError("Cannot terminate server process with PID %d", pid);
   }
-
-  CloseHandle(process);
   return result;
 }
 
@@ -1111,16 +1165,44 @@ void SetEnv(const string& name, const string& value) {
 
 void UnsetEnv(const string& name) { SetEnv(name, ""); }
 
+#ifndef ENABLE_PROCESSED_OUTPUT
+// From MSDN about BOOL SetConsoleMode(HANDLE, DWORD).
+#define ENABLE_PROCESSED_OUTPUT 0x0001
+#endif  // not ENABLE_PROCESSED_OUTPUT
+
+#ifndef ENABLE_WRAP_AT_EOL_OUTPUT
+// From MSDN about BOOL SetConsoleMode(HANDLE, DWORD).
+#define ENABLE_WRAP_AT_EOL_OUTPUT 0x0002
+#endif  // not ENABLE_WRAP_AT_EOL_OUTPUT
+
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+// From MSDN about BOOL SetConsoleMode(HANDLE, DWORD).
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif  // not ENABLE_VIRTUAL_TERMINAL_PROCESSING
+
 void SetupStdStreams() {
 #ifdef COMPILER_MSVC
   static const DWORD stdhandles[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
                                      STD_ERROR_HANDLE};
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i <= 2; ++i) {
     HANDLE handle = ::GetStdHandle(stdhandles[i]);
     if (handle == INVALID_HANDLE_VALUE || handle == NULL) {
       // Ensure we have open fds to each std* stream. Otherwise we can end up
       // with bizarre things like stdout going to the lock file, etc.
       _open("NUL", (i == 0) ? _O_RDONLY : _O_WRONLY);
+    }
+    DWORD mode = 0;
+    if (i > 0 && handle != INVALID_HANDLE_VALUE && handle != NULL &&
+        ::GetConsoleMode(handle, &mode)) {
+      DWORD newmode = mode | ENABLE_PROCESSED_OUTPUT |
+                      ENABLE_WRAP_AT_EOL_OUTPUT |
+                      ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+      if (mode != newmode) {
+        // We don't care about the success of this. Worst that can happen if
+        // this method fails is that the console won't understand control
+        // characters like color change or carriage return.
+        ::SetConsoleMode(handle, newmode);
+      }
     }
   }
 #else  // not COMPILER_MSVC
@@ -1192,93 +1274,74 @@ uint64_t WindowsClock::GetProcessMilliseconds() const {
 
 uint64_t AcquireLock(const string& output_base, bool batch_mode, bool block,
                      BlazeLock* blaze_lock) {
-#ifdef COMPILER_MSVC
-  // TODO(bazel-team): implement this.
-  return 0;
-#else  // not COMPILER_MSVC
   string lockfile = blaze_util::JoinPath(output_base, "lock");
-  int lockfd = open(lockfile.c_str(), O_CREAT|O_RDWR, 0644);
-
-  if (lockfd < 0) {
+  wstring wlockfile;
+  if (!blaze_util::AsWindowsPathWithUncPrefix(lockfile, &wlockfile)) {
     pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "cannot open lockfile '%s' for writing", lockfile.c_str());
+         "AcquireLock, lockfile=(%s)", lockfile.c_str());
   }
 
-  // Keep server from inheriting a useless fd if we are not in batch mode
-  if (!batch_mode) {
-    if (fcntl(lockfd, F_SETFD, FD_CLOEXEC) == -1) {
+  blaze_lock->handle = INVALID_HANDLE_VALUE;
+  bool first_lock_attempt = true;
+  uint64_t st = GetMillisecondsMonotonic();
+  while (true) {
+    blaze_lock->handle = ::CreateFileW(
+        /* lpFileName */ wlockfile.c_str(),
+        /* dwDesiredAccess */ GENERIC_READ | GENERIC_WRITE,
+        /* dwShareMode */ FILE_SHARE_READ,
+        /* lpSecurityAttributes */ NULL,
+        /* dwCreationDisposition */ CREATE_ALWAYS,
+        /* dwFlagsAndAttributes */ FILE_ATTRIBUTE_NORMAL,
+        /* hTemplateFile */ NULL);
+    if (blaze_lock->handle != INVALID_HANDLE_VALUE) {
+      // We could open the file, so noone else holds a lock on it.
+      break;
+    }
+    if (GetLastError() == ERROR_SHARING_VIOLATION) {
+      // Someone else has the lock.
+      if (!block) {
+        die(blaze_exit_code::BAD_ARGV,
+            "Another command is running. Exiting immediately.");
+      }
+      if (first_lock_attempt) {
+        first_lock_attempt = false;
+        fprintf(stderr,
+                "Another command is running. Waiting for it to complete...");
+        fflush(stderr);
+      }
+      Sleep(/* dwMilliseconds */ 200);
+    } else {
       pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "fcntl(F_SETFD) failed for lockfile");
+           "cannot open lockfile '%s', and not because it's held",
+           lockfile.c_str());
     }
   }
+  uint64_t wait_time = GetMillisecondsMonotonic() - st;
 
-  struct flock lock;
-  lock.l_type = F_WRLCK;
-  lock.l_whence = SEEK_SET;
-  lock.l_start = 0;
-  // This doesn't really matter now, but allows us to subdivide the lock
-  // later if that becomes meaningful.  (Ranges beyond EOF can be locked.)
-  lock.l_len = 4096;
-
-  uint64_t wait_time = 0;
-  // Try to take the lock, without blocking.
-  if (fcntl(lockfd, F_SETLK, &lock) == -1) {
-    if (errno != EACCES && errno != EAGAIN) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "unexpected result from F_SETLK");
-    }
-
-    // We didn't get the lock.  Find out who has it.
-    struct flock probe = lock;
-    probe.l_pid = 0;
-    if (fcntl(lockfd, F_GETLK, &probe) == -1) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "unexpected result from F_GETLK");
-    }
-    if (!block) {
-      die(blaze_exit_code::BAD_ARGV,
-          "Another command is running (pid=%d). Exiting immediately.",
-          probe.l_pid);
-    }
-    fprintf(stderr, "Another command is running (pid = %d).  "
-            "Waiting for it to complete...", probe.l_pid);
-    fflush(stderr);
-
-    // Take a clock sample for that start of the waiting time
-    uint64_t st = GetMillisecondsMonotonic();
-    // Try to take the lock again (blocking).
-    int r;
-    do {
-      r = fcntl(lockfd, F_SETLKW, &lock);
-    } while (r == -1 && errno == EINTR);
-    fprintf(stderr, "\n");
-    if (r == -1) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "couldn't acquire file lock");
-    }
-    // Take another clock sample, calculate elapsed
-    uint64_t et = GetMillisecondsMonotonic();
-    wait_time = et - st;
+  // We have the lock.
+  OVERLAPPED overlapped = {0};
+  if (!LockFileEx(
+          /* hFile */ blaze_lock->handle,
+          /* dwFlags */ LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+          /* dwReserved */ 0,
+          /* nNumberOfBytesToLockLow */ 1,
+          /* nNumberOfBytesToLockHigh */ 0,
+          /* lpOverlapped */ &overlapped)) {
+    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
+         "cannot lock the lockfile '%s'", lockfile.c_str());
   }
+  // On other platforms we write some info about this process into the lock file
+  // such as the server PID. On Windows we don't do that because the file is
+  // locked exclusively, meaning other processes may not open the file even for
+  // reading.
 
-  // Identify ourselves in the lockfile.
-  (void) ftruncate(lockfd, 0);
-  const char *tty = ttyname(STDIN_FILENO);  // NOLINT (single-threaded)
-  string msg = "owner=launcher\npid="
-      + ToString(getpid()) + "\ntty=" + (tty ? tty : "") + "\n";
-  // The contents are currently meant only for debugging.
-  (void) write(lockfd, msg.data(), msg.size());
-  blaze_lock->lockfd = lockfd;
   return wait_time;
-#endif  // COMPILER_MSVC
 }
 
 void ReleaseLock(BlazeLock* blaze_lock) {
-#ifdef COMPILER_MSVC
-  // TODO(bazel-team): implement this.
-#else  // not COMPILER_MSVC
-  close(blaze_lock->lockfd);
-#endif  // COMPILER_MSVC
+  OVERLAPPED overlapped = {0};
+  UnlockFileEx(blaze_lock->handle, 0, 1, 0, &overlapped);
+  CloseHandle(blaze_lock->handle);
 }
 
 #ifdef GetUserName
@@ -1313,9 +1376,18 @@ bool IsEmacsTerminal() {
 // environment variables).
 bool IsStandardTerminal() {
 #ifdef COMPILER_MSVC
-  // TODO(bazel-team): Implement this method properly. We may return true if
-  // stdout and stderr are not redirected.
-  return false;
+  for (DWORD i : {STD_OUTPUT_HANDLE, STD_ERROR_HANDLE}) {
+    DWORD mode = 0;
+    HANDLE handle = ::GetStdHandle(i);
+    // handle may be invalid when std{out,err} is redirected
+    if (handle == INVALID_HANDLE_VALUE || !::GetConsoleMode(handle, &mode) ||
+        !(mode & ENABLE_PROCESSED_OUTPUT) ||
+        !(mode & ENABLE_WRAP_AT_EOL_OUTPUT) ||
+        !(mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+      return false;
+    }
+  }
+  return true;
 #else  // not COMPILER_MSVC
   string term = GetEnv("TERM");
   if (term.empty() || term == "dumb" || term == "emacs" ||
@@ -1346,18 +1418,17 @@ int GetTerminalColumns() {
     }
   }
 
-#ifdef COMPILER_MSVC
-  // This code path is MSVC-only because when running under MSYS there's no
-  // Windows console attached so GetConsoleScreenBufferInfo fails.
-  windows_util::AutoHandle stdout_handle(::GetStdHandle(STD_OUTPUT_HANDLE));
-  CONSOLE_SCREEN_BUFFER_INFO screen_info;
-  if (GetConsoleScreenBufferInfo(stdout_handle, &screen_info)) {
-    int width = 1 + screen_info.srWindow.Right - screen_info.srWindow.Left;
-    if (width > 1) {
-      return width;
+  HANDLE stdout_handle = ::GetStdHandle(STD_OUTPUT_HANDLE);
+  if (stdout_handle != INVALID_HANDLE_VALUE) {
+    // stdout_handle may be invalid when stdout is redirected.
+    CONSOLE_SCREEN_BUFFER_INFO screen_info;
+    if (GetConsoleScreenBufferInfo(stdout_handle, &screen_info)) {
+      int width = 1 + screen_info.srWindow.Right - screen_info.srWindow.Left;
+      if (width > 1) {
+        return width;
+      }
     }
   }
-#endif  // COMPILER_MSVC
 
   return 80;  // default if not a terminal.
 }

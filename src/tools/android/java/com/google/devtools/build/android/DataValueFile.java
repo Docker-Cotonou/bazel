@@ -121,4 +121,13 @@ public class DataValueFile implements DataResource, DataAsset {
     resourceClassWriter.writeSimpleResource(key.type(), key.name());
   }
 
+  @Override
+  public DataValue update(DataSource source) {
+    return of(source);
+  }
+
+  @Override
+  public String asConflictString() {
+    return source.asConflictString();
+  }
 }

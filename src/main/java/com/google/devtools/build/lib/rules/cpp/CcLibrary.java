@@ -156,7 +156,7 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
       if (outs.size() > 1) {
         ruleContext.attributeError("outs", "must be a singleton list");
       } else if (outs.size() == 1) {
-        PathFragment soImplFilename = new PathFragment(ruleContext.getLabel().getName());
+        PathFragment soImplFilename = PathFragment.create(ruleContext.getLabel().getName());
         soImplFilename = soImplFilename.replaceName(outs.get(0));
         if (!soImplFilename.getPathString().endsWith(".so")) { // Sanity check.
           ruleContext.attributeError("outs", "file name must end in '.so'");
@@ -314,7 +314,9 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
         ccCompilationOutputs.getFilesToCompile(
             isLipoCollector, processHeadersInDependencies, usePic));
     for (OutputGroupProvider dep :
-        ruleContext.getPrerequisites("deps", Mode.TARGET, OutputGroupProvider.class)) {
+        ruleContext.getPrerequisites("deps", Mode.TARGET,
+            OutputGroupProvider.SKYLARK_CONSTRUCTOR.getKey(),
+            OutputGroupProvider.class)) {
       artifactsToForceBuilder.addTransitive(
           dep.getOutputGroup(OutputGroupProvider.HIDDEN_TOP_LEVEL));
     }

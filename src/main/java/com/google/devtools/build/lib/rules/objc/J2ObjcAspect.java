@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ParameterFile;
+import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -84,14 +85,14 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
     this.toolsRepository = toolsRepository;
   }
 
-  private static final Iterable<Attribute> JAVA_DEPENDENT_ATTRIBUTES =
+  private static final ImmutableList<Attribute> JAVA_DEPENDENT_ATTRIBUTES =
       ImmutableList.of(
           new Attribute(":jre_lib", Mode.TARGET),
           new Attribute("deps", Mode.TARGET),
           new Attribute("exports", Mode.TARGET),
           new Attribute("runtime_deps", Mode.TARGET));
 
-  private static final Iterable<Attribute> PROTO_DEPENDENT_ATTRIBUTES =
+  private static final ImmutableList<Attribute> PROTO_DEPENDENT_ATTRIBUTES =
       ImmutableList.of(
           new Attribute("$protobuf_lib", Mode.TARGET), new Attribute("deps", Mode.TARGET));
 
@@ -104,8 +105,16 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
   private static final String PROTO_SOURCE_FILE_BLACKLIST_ATTR = "$j2objc_proto_blacklist";
 
   /** Flags passed to J2ObjC proto compiler plugin. */
-  protected static final Iterable<String> J2OBJC_PLUGIN_PARAMS =
+  protected static final ImmutableList<String> J2OBJC_PLUGIN_PARAMS =
       ImmutableList.of("file_dir_mapping", "generate_class_mappings");
+
+  private static final LateBoundLabel<BuildConfiguration> DEAD_CODE_REPORT =
+      new LateBoundLabel<BuildConfiguration>(J2ObjcConfiguration.class) {
+    @Override
+    public Label resolve(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+      return configuration.getFragment(J2ObjcConfiguration.class).deadCodeReport().orNull();
+    }
+  };
 
   private static final LateBoundLabel<BuildConfiguration> JRE_LIB =
       new LateBoundLabel<BuildConfiguration>(JRE_CORE_LIB, J2ObjcConfiguration.class) {
@@ -171,11 +180,24 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
                     Label.parseAbsoluteUnchecked(
                         toolsRepository + "//tools/j2objc:j2objc_wrapper")))
         .add(
+            attr("$j2objc_header_map", LABEL)
+                .allowedFileTypes(FileType.of(".py"))
+                .cfg(HOST)
+                .exec()
+                .singleArtifact()
+                .value(
+                    Label.parseAbsoluteUnchecked(
+                        toolsRepository + "//tools/j2objc:j2objc_header_map")))
+        .add(
             attr("$jre_emul_jar", LABEL)
                 .cfg(HOST)
                 .value(
                     Label.parseAbsoluteUnchecked(
                         toolsRepository + "//third_party/java/j2objc:jre_emul.jar")))
+        .add(
+            attr(":dead_code_report", LABEL)
+                .cfg(HOST)
+                .value(DEAD_CODE_REPORT))
         .add(attr(":jre_lib", LABEL).value(JRE_LIB))
         .add(
             attr("$protobuf_lib", LABEL)
@@ -265,11 +287,11 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
             CppHelper.getToolchain(ruleContext, ":j2objc_cc_toolchain");
         FdoSupportProvider fdoSupport =
             CppHelper.getFdoSupport(ruleContext, ":j2objc_cc_toolchain");
-        CompilationSupport compilationSupport = CompilationSupport.createWithSelectedImplementation(
-            ruleContext,
-            ruleContext.getConfiguration(),
-            ObjcRuleClasses.j2objcIntermediateArtifacts(ruleContext),
-            CompilationAttributes.Builder.fromRuleContext(ruleContext).build());
+        CompilationSupport compilationSupport =
+            new CompilationSupport.Builder()
+                .setRuleContext(ruleContext)
+                .setIntermediateArtifacts(ObjcRuleClasses.j2objcIntermediateArtifacts(ruleContext))
+                .build();
 
         compilationSupport
             .registerCompileAndArchiveActions(
@@ -423,7 +445,11 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
     // J2ObjC merges all transitive input header mapping files into one header mapping file,
     // so we only need to re-export other dependent output header mapping files in proto rules and
     // rules where J2ObjC is not run (e.g., no sources).
-    if (isProtoRule(base) || exportedHeaderMappingFiles.isEmpty()) {
+    // We also add the transitive header mapping files if experimental J2ObjC header mapping is
+    // turned on. The experimental support does not merge transitive input header mapping files.
+    boolean experimentalJ2ObjcHeaderMap =
+        ruleContext.getFragment(J2ObjcConfiguration.class).experimentalJ2ObjcHeaderMap();
+    if (isProtoRule(base) || exportedHeaderMappingFiles.isEmpty() || experimentalJ2ObjcHeaderMap) {
       exportedHeaderMappingFiles.addTransitive(
           depJ2ObjcMappingFileProvider.getHeaderMappingFiles());
     }
@@ -507,8 +533,12 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
       argBuilder.addJoinExecPaths("--header-mapping", ",", depsHeaderMappingFiles);
     }
 
+    boolean experimentalJ2ObjcHeaderMap =
+        ruleContext.getFragment(J2ObjcConfiguration.class).experimentalJ2ObjcHeaderMap();
     Artifact outputHeaderMappingFile = j2ObjcOutputHeaderMappingFile(ruleContext);
-    argBuilder.addExecPath("--output-header-mapping", outputHeaderMappingFile);
+    if (!experimentalJ2ObjcHeaderMap) {
+      argBuilder.addExecPath("--output-header-mapping", outputHeaderMappingFile);
+    }
 
     NestedSet<Artifact> depsClassMappingFiles = depJ2ObjcMappingFileProvider.getClassMappingFiles();
     if (!depsClassMappingFiles.isEmpty()) {
@@ -523,6 +553,11 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
 
     Artifact bootclasspathJar = ruleContext.getPrerequisiteArtifact("$jre_emul_jar", Mode.HOST);
     argBuilder.add("-Xbootclasspath:" + bootclasspathJar.getExecPathString());
+
+    Artifact deadCodeReport = ruleContext.getPrerequisiteArtifact(":dead_code_report", Mode.HOST);
+    if (deadCodeReport != null) {
+      argBuilder.addExecPath("--dead-code-report", deadCodeReport);
+    }
 
     argBuilder.add("-d").addPath(j2ObjcSource.getObjcFilePath());
 
@@ -542,29 +577,56 @@ public class J2ObjcAspect extends NativeAspectClass implements ConfiguredAspectF
         ParameterFile.ParameterFileType.UNQUOTED,
         ISO_8859_1));
 
-    SpawnAction.Builder builder = new SpawnAction.Builder()
-        .setMnemonic("TranspilingJ2objc")
-        .setExecutable(ruleContext.getPrerequisiteArtifact("$j2objc_wrapper", Mode.HOST))
-        .addInput(ruleContext.getPrerequisiteArtifact("$j2objc_wrapper", Mode.HOST))
-        .addInput(j2ObjcDeployJar)
-        .addInput(bootclasspathJar)
-        .addInputs(sources)
-        .addInputs(sourceJars)
-        .addTransitiveInputs(compileTimeJars)
-        .addTransitiveInputs(JavaHelper.getHostJavabaseInputs(ruleContext))
-        .addTransitiveInputs(depsHeaderMappingFiles)
-        .addTransitiveInputs(depsClassMappingFiles)
-        .addInput(paramFile)
-        .setCommandLine(CustomCommandLine.builder()
-            .addPaths("@%s", paramFile.getExecPath())
-            .build())
-        .addOutputs(j2ObjcSource.getObjcSrcs())
-        .addOutputs(j2ObjcSource.getObjcHdrs())
-        .addOutput(outputHeaderMappingFile)
-        .addOutput(outputDependencyMappingFile)
-        .addOutput(archiveSourceMappingFile);
+    SpawnAction.Builder transpilationAction =
+        new SpawnAction.Builder()
+            .setMnemonic("TranspilingJ2objc")
+            .setExecutable(ruleContext.getPrerequisiteArtifact("$j2objc_wrapper", Mode.HOST))
+            .addInput(ruleContext.getPrerequisiteArtifact("$j2objc_wrapper", Mode.HOST))
+            .addInput(j2ObjcDeployJar)
+            .addInput(bootclasspathJar)
+            .addInputs(sources)
+            .addInputs(sourceJars)
+            .addTransitiveInputs(compileTimeJars)
+            .addTransitiveInputs(JavaHelper.getHostJavabaseInputs(ruleContext))
+            .addTransitiveInputs(depsHeaderMappingFiles)
+            .addTransitiveInputs(depsClassMappingFiles)
+            .addInput(paramFile)
+            .setCommandLine(
+                CustomCommandLine.builder().addPaths("@%s", paramFile.getExecPath()).build())
+            .addOutputs(j2ObjcSource.getObjcSrcs())
+            .addOutputs(j2ObjcSource.getObjcHdrs())
+            .addOutput(outputDependencyMappingFile)
+            .addOutput(archiveSourceMappingFile);
 
-    ruleContext.registerAction(builder.build(ruleContext));
+    if (deadCodeReport != null) {
+      transpilationAction.addInput(deadCodeReport);
+    }
+
+    if (!experimentalJ2ObjcHeaderMap) {
+      transpilationAction.addOutput(outputHeaderMappingFile);
+    }
+    ruleContext.registerAction(transpilationAction.build(ruleContext));
+
+    if (experimentalJ2ObjcHeaderMap) {
+      CustomCommandLine.Builder headerMapCommandLine = CustomCommandLine.builder();
+      if (!Iterables.isEmpty(sources)) {
+        headerMapCommandLine.addJoinExecPaths("--source_files", ",", sources);
+      }
+      if (!Iterables.isEmpty(sourceJars)) {
+        headerMapCommandLine.addJoinExecPaths("--source_jars", ",", sourceJars);
+      }
+      headerMapCommandLine.addExecPath("--output_mapping_file", outputHeaderMappingFile);
+      ruleContext.registerAction(new SpawnAction.Builder()
+          .setMnemonic("GenerateJ2objcHeaderMap")
+          .setExecutable(ruleContext.getPrerequisiteArtifact("$j2objc_header_map", Mode.HOST))
+          .addInput(ruleContext.getPrerequisiteArtifact("$j2objc_header_map", Mode.HOST))
+          .addInputs(sources)
+          .addInputs(sourceJars)
+          .setCommandLine(headerMapCommandLine.build())
+          .useParameterFile(ParameterFileType.SHELL_QUOTED)
+          .addOutput(outputHeaderMappingFile)
+          .build(ruleContext));
+    }
 
     return new J2ObjcMappingFileProvider(
         NestedSetBuilder.<Artifact>stableOrder().add(outputHeaderMappingFile).build(),

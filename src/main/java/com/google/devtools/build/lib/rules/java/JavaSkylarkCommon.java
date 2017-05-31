@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.MiddlemanProvider;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -31,6 +32,7 @@ import com.google.devtools.build.lib.rules.java.proto.StrictDepsUtils;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import java.util.List;
 
@@ -119,13 +121,19 @@ public class JavaSkylarkCommon {
         doc = "A list of the Java source files to be compiled. At least one of source_jars or "
           + "source_files should be specified."
       ),
-      @Param(name = "output", positional = false, named = true, type = Artifact.class),
+      @Param(
+        name = "output",
+        positional = false,
+        named = true,
+        type = Artifact.class
+      ),
       @Param(
         name = "javac_opts",
         positional = false,
         named = true,
         type = SkylarkList.class,
         generic1 = String.class,
+        defaultValue =  "[]",
         doc = "A list of the desired javac options. Optional."
       ),
       @Param(
@@ -134,11 +142,12 @@ public class JavaSkylarkCommon {
         named = true,
         type = SkylarkList.class,
         generic1 = JavaProvider.class,
+        defaultValue = "[]",
         doc = "A list of dependencies. Optional."
       ),
       @Param(
         name = "strict_deps",
-        defaultValue = "OFF",
+        defaultValue = "'ERROR'",
         positional = false,
         named = true,
         type = String.class,
@@ -161,6 +170,14 @@ public class JavaSkylarkCommon {
         type = ConfiguredTarget.class,
         doc = "A label pointing to a JDK to be used for this compilation. Mandatory."
       ),
+      @Param(
+        name = "sourcepath",
+        positional = false,
+        named = true,
+        type = SkylarkList.class,
+        generic1 = Artifact.class,
+        defaultValue = "[]"
+      )
     }
   )
   public JavaProvider createJavaCompileAction(
@@ -172,12 +189,15 @@ public class JavaSkylarkCommon {
       SkylarkList<JavaProvider> deps,
       String strictDepsMode,
       ConfiguredTarget javaToolchain,
-      ConfiguredTarget hostJavabase) {
+      ConfiguredTarget hostJavabase,
+      SkylarkList<Artifact> sourcepathEntries) throws EvalException {
+
     JavaLibraryHelper helper =
         new JavaLibraryHelper(skylarkRuleContext.getRuleContext())
             .setOutput(outputJar)
             .addSourceJars(sourceJars)
             .addSourceFiles(sourceFiles)
+            .setSourcePathEntries(sourcepathEntries)
             .setJavacOpts(javacOpts);
 
     List<JavaCompilationArgsProvider> compilationArgsProviders =
@@ -202,12 +222,15 @@ public class JavaSkylarkCommon {
         JavaRuleOutputJarsProvider.builder().addOutputJar(
             new JavaRuleOutputJarsProvider.OutputJar(outputJar, /* ijar */ null, sourceJars))
         .build();
+    JavaCompilationArgsProvider javaCompilationArgsProvider =
+        helper.buildCompilationArgsProvider(artifacts, true);
+    Runfiles runfiles = new Runfiles.Builder(skylarkRuleContext.getWorkspaceName()).addArtifacts(
+        javaCompilationArgsProvider.getRecursiveJavaCompilationArgs().getRuntimeJars()).build();
     return JavaProvider.Builder.create()
-             .addProvider(
-                 JavaCompilationArgsProvider.class,
-                 helper.buildCompilationArgsProvider(artifacts, true))
+             .addProvider(JavaCompilationArgsProvider.class, javaCompilationArgsProvider)
              .addProvider(JavaSourceJarsProvider.class, createJavaSourceJarsProvider(sourceJars))
              .addProvider(JavaRuleOutputJarsProvider.class, javaRuleOutputJarsProvider)
+             .addProvider(JavaRunfilesProvider.class, new JavaRunfilesProvider(runfiles))
              .build();
   }
 
@@ -231,8 +254,8 @@ public class JavaSkylarkCommon {
         @Param(name = "java_toolchain_attr", positional = false, named = true, type = String.class)
       }
   )
-  public static List<String> getDefaultJavacOpts(
-      SkylarkRuleContext skylarkRuleContext, String javaToolchainAttr) {
+  public static ImmutableList<String> getDefaultJavacOpts(
+      SkylarkRuleContext skylarkRuleContext, String javaToolchainAttr) throws EvalException {
     RuleContext ruleContext = skylarkRuleContext.getRuleContext();
     ConfiguredTarget javaToolchainConfigTarget =
         (ConfiguredTarget) checkNotNull(skylarkRuleContext.getAttr().getValue(javaToolchainAttr));

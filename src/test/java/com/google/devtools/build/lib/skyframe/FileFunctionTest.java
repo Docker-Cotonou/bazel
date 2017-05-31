@@ -37,9 +37,11 @@ import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
+import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue.BuildFileName;
@@ -165,6 +167,8 @@ public class FileFunctionTest {
             differencer);
     PrecomputedValue.BUILD_ID.set(differencer, UUID.randomUUID());
     PrecomputedValue.PATH_PACKAGE_LOCATOR.set(differencer, pkgLocator);
+    RepositoryDelegatorFunction.REPOSITORY_OVERRIDES.set(
+        differencer, ImmutableMap.<RepositoryName, PathFragment>of());
     return new SequentialBuildDriver(evaluator);
   }
 
@@ -303,7 +307,7 @@ public class FileFunctionTest {
             rootedPath("a"),
             rootedPath(""),
             RootedPath.toRootedPath(fs.getRootDirectory(), PathFragment.EMPTY_FRAGMENT),
-            RootedPath.toRootedPath(fs.getRootDirectory(), new PathFragment("outside")));
+            RootedPath.toRootedPath(fs.getRootDirectory(), PathFragment.create("outside")));
   }
 
   @Test
@@ -320,7 +324,7 @@ public class FileFunctionTest {
             rootedPath("a"),
             rootedPath(""),
             RootedPath.toRootedPath(fs.getRootDirectory(), PathFragment.EMPTY_FRAGMENT),
-            RootedPath.toRootedPath(fs.getRootDirectory(), new PathFragment("absolute")));
+            RootedPath.toRootedPath(fs.getRootDirectory(), PathFragment.create("absolute")));
   }
 
   @Test
@@ -341,10 +345,10 @@ public class FileFunctionTest {
             rootedPath("a"),
             rootedPath(""),
             RootedPath.toRootedPath(root, PathFragment.EMPTY_FRAGMENT),
-            RootedPath.toRootedPath(root, new PathFragment("output_base")),
-            RootedPath.toRootedPath(root, new PathFragment("output_base/external")),
-            RootedPath.toRootedPath(root, new PathFragment("output_base/external/a")),
-            RootedPath.toRootedPath(root, new PathFragment("output_base/external/a/b")));
+            RootedPath.toRootedPath(root, PathFragment.create("output_base")),
+            RootedPath.toRootedPath(root, PathFragment.create("output_base/external")),
+            RootedPath.toRootedPath(root, PathFragment.create("output_base/external/a")),
+            RootedPath.toRootedPath(root, PathFragment.create("output_base/external/a/b")));
   }
 
   @Test
@@ -1584,12 +1588,12 @@ public class FileFunctionTest {
   private Path symlink(String link, String target) throws Exception {
     Path path = path(link);
     FileSystemUtils.createDirectoryAndParents(path.getParentDirectory());
-    path.createSymbolicLink(new PathFragment(target));
+    path.createSymbolicLink(PathFragment.create(target));
     return path;
   }
 
   private Path path(String rootRelativePath) {
-    return pkgRoot.getRelative(new PathFragment(rootRelativePath));
+    return pkgRoot.getRelative(PathFragment.create(rootRelativePath));
   }
 
   private RootedPath rootedPath(String pathString) {

@@ -40,7 +40,6 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.AliasProvider;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
-import com.google.devtools.build.lib.rules.ToolchainProvider;
 import com.google.devtools.build.lib.rules.cpp.CppHelper;
 import com.google.devtools.build.lib.rules.java.JavaHelper;
 import com.google.devtools.build.lib.syntax.Type;
@@ -60,7 +59,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
   private static final Pattern JDK_MAKE_VARIABLE =
       Pattern.compile("\\$\\((JAVABASE|JAVA)\\)");
 
-  protected boolean requiresCrosstool(String command) {
+  protected static boolean requiresCrosstool(String command) {
     return CROSSTOOL_MAKE_VARIABLE.matcher(command).find();
   }
 
@@ -180,7 +179,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     executionInfo.putAll(getExtraExecutionInfo(ruleContext, baseCommand));
 
     NestedSetBuilder<Artifact> inputs = NestedSetBuilder.stableOrder();
-    inputs.addAll(resolvedSrcs);
+    inputs.addTransitive(resolvedSrcs);
     inputs.addAll(commandHelper.getResolvedTools());
     FilesToRunProvider genruleSetup =
         ruleContext.getPrerequisite("$genrule_setup", Mode.HOST, FilesToRunProvider.class);
@@ -290,10 +289,17 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     private final NestedSet<Artifact> resolvedSrcs;
     private final NestedSet<Artifact> filesToBuild;
 
-    public CommandResolverContext(RuleContext ruleContext, NestedSet<Artifact> resolvedSrcs,
+    private static final ImmutableList<String> makeVariableAttributes =
+        ImmutableList.of(":cc_toolchain", "toolchains");
+
+    public CommandResolverContext(
+        RuleContext ruleContext,
+        NestedSet<Artifact> resolvedSrcs,
         NestedSet<Artifact> filesToBuild) {
-      super(ruleContext.getRule().getPackage(), ruleContext.getConfiguration(),
-          ToolchainProvider.getToolchainMakeVariables(ruleContext, "toolchains"));
+      super(
+          ruleContext.getMakeVariables(makeVariableAttributes),
+          ruleContext.getRule().getPackage(),
+          ruleContext.getConfiguration());
       this.ruleContext = ruleContext;
       this.resolvedSrcs = resolvedSrcs;
       this.filesToBuild = filesToBuild;
@@ -342,7 +348,9 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
         }
       } else if (JDK_MAKE_VARIABLE.matcher("$(" + name + ")").find()) {
         return new ConfigurationMakeVariableContext(
-            ruleContext.getTarget().getPackage(), ruleContext.getHostConfiguration())
+                ruleContext.getMakeVariables(makeVariableAttributes),
+                ruleContext.getTarget().getPackage(),
+                ruleContext.getHostConfiguration())
             .lookupMakeVariable(name);
       } else {
         return super.lookupMakeVariable(name);

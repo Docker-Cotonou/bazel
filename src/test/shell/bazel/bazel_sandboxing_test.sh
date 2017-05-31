@@ -298,23 +298,6 @@ function test_sandbox_undeclared_deps_skylark_with_local_tag() {
     || fail "Action did not produce output: examples/genrule:skylark_breaks1_works_with_local_tag"
 }
 
-function test_sandbox_block_filesystem() {
-  output_file="${BAZEL_GENFILES_DIR}/examples/genrule/breaks2.txt"
-
-  bazel build --sandbox_block_path=/var/log examples/genrule:breaks2 &> $TEST_log \
-    && fail "Non-hermetic genrule succeeded: examples/genrule:breaks2" || true
-
-  [ -f "$output_file" ] ||
-    fail "Action did not produce output: $output_file"
-
-  if [ $(wc -l $output_file) -gt 1 ]; then
-    fail "Output contained more than one line: $output_file"
-  fi
-
-  fgrep "Permission denied" $output_file ||
-    fail "Output did not contain expected error message: $output_file"
-}
-
 function test_sandbox_cyclic_symlink_in_inputs() {
   bazel build examples/genrule:breaks3 &> $TEST_log \
     && fail "Genrule with cyclic symlinks succeeded: examples/genrule:breaks3" || true
@@ -378,6 +361,7 @@ EOF
 }
 
 function test_sandbox_can_resolve_own_hostname() {
+  setup_javatest_support
   mkdir -p src/test/java/com/example
   cat > src/test/java/com/example/HostNameTest.java <<'EOF'
 package com.example;
@@ -400,6 +384,7 @@ EOF
 java_test(
   name = "HostNameTest",
   srcs = ["HostNameTest.java"],
+  deps = ['//third_party:junit4'],
 )
 EOF
 
@@ -408,6 +393,7 @@ EOF
 }
 
 function test_hostname_inside_sandbox_is_localhost_when_using_sandbox_fake_hostname_flag() {
+  setup_javatest_support
   mkdir -p src/test/java/com/example
   cat > src/test/java/com/example/HostNameIsLocalhostTest.java <<'EOF'
 package com.example;
@@ -430,6 +416,7 @@ EOF
 java_test(
   name = "HostNameIsLocalhostTest",
   srcs = ["HostNameIsLocalhostTest.java"],
+  deps = ['//third_party:junit4'],
 )
 EOF
 
@@ -505,7 +492,8 @@ EOF
   expect_log "Executing genrule //:test failed:"
 }
 
-function test_sandbox_mount_customized_path () {
+# TODO(xingao) Disabled due to https://github.com/bazelbuild/bazel/issues/2760
+function DISABLED_test_sandbox_mount_customized_path () {
   # Create BUILD file
   cat > BUILD <<'EOF'
 package(default_visibility = ["//visibility:public"])
@@ -532,10 +520,6 @@ local_repository(
   path = './downloaded_toolchain',
 )
 EOF
-
-  # Prepare the sandbox root
-  SANDBOX_ROOT="${TEST_TMPDIR}/sandbox.root"
-  mkdir -p ${SANDBOX_ROOT}
 
   # Define the mount source and target.
   source="${TEST_TMPDIR}/workspace/downloaded_toolchain/x86_64-unknown-linux-gnu/sysroot/lib64/ld-2.19.so"
@@ -578,7 +562,7 @@ EOF
   # Use linux_sandbox binary to run bazel-bin/hello-world binary in the sandbox environment
   # First, no path mounting. The execution should fail.
   echo "Run the binary bazel-bin/hello-world without mounting the path"
-  $linux_sandbox -D -S ${SANDBOX_ROOT} -- bazel-bin/hello-world &> $TEST_log || code=$?
+  $linux_sandbox -D -- bazel-bin/hello-world &> $TEST_log || code=$?
   expect_log "child exited normally with exitcode 1"
 
   # Second, with path mounting. The execution should succeed.
@@ -586,12 +570,13 @@ EOF
   # Create the mount target manually as sandbox binary does not create target paths
   mkdir -p ${target_folder}
   touch ${target}
-  $linux_sandbox -D -S ${SANDBOX_ROOT} \
+  $linux_sandbox -D \
   -M ${source} \
   -m ${target} \
   -- bazel-bin/hello-world &> $TEST_log || code=$?
   expect_log "Hello, world!"
   expect_log "child exited normally with exitcode 0"
+
   # Remove the mount target folder as sandbox binary does not do the cleanup
   rm -rf ${target_root}/x86_64-unknown-linux-gnu
 }

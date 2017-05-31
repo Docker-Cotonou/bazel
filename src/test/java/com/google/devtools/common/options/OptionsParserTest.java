@@ -27,9 +27,16 @@ import static org.junit.Assert.fail;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
+import com.google.devtools.common.options.OptionsParser.ConstructionException;
+import com.google.devtools.common.options.OptionsParser.OptionUsageRestrictions;
 import com.google.devtools.common.options.OptionsParser.OptionValueDescription;
 import com.google.devtools.common.options.OptionsParser.UnparsedOptionValueDescription;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -49,6 +56,31 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class OptionsParserTest {
+
+  /** Dummy comment (linter suppression) */
+  public static class BadOptions extends OptionsBase {
+    @Option(
+      name = "foo",
+      defaultValue = "false"
+    )
+    public boolean foo1;
+
+    @Option(
+      name = "foo",
+      defaultValue = "false"
+    )
+    public boolean foo2;
+  }
+
+  @Test
+  public void errorsDuringConstructionAreWrapped() {
+    try {
+      newOptionsParser(BadOptions.class);
+      fail();
+    } catch (OptionsParser.ConstructionException e) {
+      assertThat(e.getCause()).isInstanceOf(DuplicateOptionDeclarationException.class);
+    }
+  }
 
   public static class ExampleFoo extends OptionsBase {
 
@@ -75,10 +107,12 @@ public class OptionsParserTest {
             allowMultiple = true)
     public List<String> bang;
 
-    @Option(name = "nodoc",
-        category = "undocumented",
-        defaultValue = "",
-        allowMultiple = false)
+    @Option(
+      name = "nodoc",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      defaultValue = "",
+      allowMultiple = false
+    )
     public String nodoc;
   }
 
@@ -107,6 +141,32 @@ public class OptionsParserTest {
             defaultValue = "defaultBoom",
             converter = EmptyToNullStringConverter.class)
     public String boom;
+  }
+
+  /**
+   * Example with internal options
+   */
+  public static class ExampleInternalOptions extends OptionsBase {
+    @Option(
+      name = "internal_boolean",
+      optionUsageRestrictions = OptionUsageRestrictions.INTERNAL,
+      defaultValue = "true"
+    )
+    public boolean privateBoolean;
+
+    @Option(
+      name = "internal_string",
+      optionUsageRestrictions = OptionUsageRestrictions.INTERNAL,
+      defaultValue = "super secret"
+    )
+    public String privateString;
+
+    @Option(
+      name = "public string",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      defaultValue = "not a secret"
+    )
+    public String publicString;
   }
 
   public static class StringConverter implements Converter<String> {
@@ -468,6 +528,70 @@ public class OptionsParserTest {
   }
 
   @Test
+  public void parsingFailsWithInternalBooleanOptionAsIfUnknown() {
+    OptionsParser parser = newOptionsParser(ExampleInternalOptions.class);
+    List<String> internalOpts = asList("--internal_boolean");
+    try {
+      parser.parse(internalOpts);
+      fail();
+    } catch (OptionsParsingException e) {
+      assertEquals("--internal_boolean", e.getInvalidArgument());
+      assertEquals("Unrecognized option: --internal_boolean", e.getMessage());
+      assertNotNull(parser.getOptions(ExampleInternalOptions.class));
+    }
+  }
+
+  @Test
+  public void parsingFailsWithNegatedInternalBooleanOptionAsIfUnknown() {
+    OptionsParser parser = newOptionsParser(ExampleInternalOptions.class);
+    List<String> internalOpts = asList("--nointernal_boolean");
+    try {
+      parser.parse(internalOpts);
+      fail();
+    } catch (OptionsParsingException e) {
+      assertEquals("--nointernal_boolean", e.getInvalidArgument());
+      assertEquals("Unrecognized option: --nointernal_boolean", e.getMessage());
+      assertNotNull(parser.getOptions(ExampleInternalOptions.class));
+    }
+  }
+
+  @Test
+  public void parsingSucceedsWithSpacesInFlagName() throws OptionsParsingException {
+    OptionsParser parser = newOptionsParser(ExampleInternalOptions.class);
+    List<String> spacedOpts = asList("--public string=value with spaces");
+    parser.parse(spacedOpts);
+    assertEquals(parser.getOptions(ExampleInternalOptions.class).publicString, "value with spaces");
+  }
+
+  @Test
+  public void parsingFailsForInternalOptionWithValueInSameArgAsIfUnknown() {
+    OptionsParser parser = newOptionsParser(ExampleInternalOptions.class);
+    List<String> internalOpts = asList("--internal_string=any_value");
+    try {
+      parser.parse(internalOpts);
+      fail("parsing should have failed for including a private option");
+    } catch (OptionsParsingException e) {
+      assertEquals("--internal_string=any_value", e.getInvalidArgument());
+      assertEquals("Unrecognized option: --internal_string=any_value", e.getMessage());
+      assertNotNull(parser.getOptions(ExampleInternalOptions.class));
+    }
+  }
+
+  @Test
+  public void parsingFailsForInternalOptionWithValueInSeparateArgAsIfUnknown() {
+    OptionsParser parser = newOptionsParser(ExampleInternalOptions.class);
+    List<String> internalOpts = asList("--internal_string", "any_value");
+    try {
+      parser.parse(internalOpts);
+      fail("parsing should have failed for including a private option");
+    } catch (OptionsParsingException e) {
+      assertEquals("--internal_string", e.getInvalidArgument());
+      assertEquals("Unrecognized option: --internal_string", e.getMessage());
+      assertNotNull(parser.getOptions(ExampleInternalOptions.class));
+    }
+  }
+
+  @Test
   public void parseKnownAndUnknownOptions() {
     OptionsParser parser = newOptionsParser(ExampleFoo.class, ExampleBaz.class);
     List<String> opts = asList("--bar", "17", "--unknown", "option");
@@ -494,9 +618,12 @@ public class OptionsParserTest {
   }
 
   public static class CategoryTest extends OptionsBase {
-    @Option(name = "swiss_bank_account_number",
-            category = "undocumented", // Not printed in usage messages!
-            defaultValue = "123456789")
+    @Option(
+      name = "swiss_bank_account_number",
+      optionUsageRestrictions =
+          OptionUsageRestrictions.UNDOCUMENTED, // Not printed in usage messages!
+      defaultValue = "123456789"
+    )
     public int swissBankAccountNumber;
 
     @Option(name = "student_bank_account_number",
@@ -740,32 +867,117 @@ public class OptionsParserTest {
     fail();
   }
 
-  public static class ExpansionOptions extends OptionsBase {
-    @Option(name = "first",
-            expansion = { "--second=first" },
-            defaultValue = "null")
-    public Void first;
+  /** ConflictingExpansionOptions */
+  public static class ConflictingExpansionsOptions extends OptionsBase {
 
-    @Option(name = "second",
-            defaultValue = "null")
-    public String second;
+    /** ExpFunc */
+    public static class ExpFunc implements ExpansionFunction {
+      @Override
+      public String[] getExpansion(IsolatedOptionsData optionsData) {
+        return new String[] {"--yyy"};
+      }
+    }
+
+    @Option(
+      name = "badness",
+      expansion = {"--xxx"},
+      expansionFunction = ExpFunc.class,
+      defaultValue = "null"
+    )
+    public Void badness;
+  }
+
+  @Test
+  public void conflictingExpansions() throws Exception {
+    try {
+      newOptionsParser(ConflictingExpansionsOptions.class);
+      fail("Should have failed due to specifying both expansion and expansionFunction");
+    } catch (AssertionError e) {
+      assertThat(e.getMessage())
+          .contains("Cannot set both expansion and expansionFunction for " + "option --badness");
+    }
+  }
+
+  /** NullExpansionOptions */
+  public static class NullExpansionsOptions extends OptionsBase {
+
+    /** ExpFunc */
+    public static class ExpFunc implements ExpansionFunction {
+      @Override
+      public String[] getExpansion(IsolatedOptionsData optionsData) {
+        return null;
+      }
+    }
+
+    @Option(name = "badness", expansionFunction = ExpFunc.class, defaultValue = "null")
+    public Void badness;
+  }
+
+  @Test
+  public void nullExpansions() throws Exception {
+    // Ensure that we get the NPE at the time of parser construction, not later when actually
+    // parsing.
+    try {
+      newOptionsParser(NullExpansionsOptions.class);
+      fail("Should have failed due to null expansion function result");
+    } catch (OptionsParser.ConstructionException e) {
+      assertThat(e.getCause()).isInstanceOf(NullPointerException.class);
+      assertThat(e.getCause().getMessage()).contains("null value in entry");
+    }
+  }
+
+  /** ExpansionOptions */
+  public static class ExpansionOptions extends OptionsBase {
+    @Option(name = "underlying", defaultValue = "null")
+    public String underlying;
+
+    @Option(
+      name = "expands",
+      expansion = {"--underlying=from_expansion"},
+      defaultValue = "null"
+    )
+    public Void expands;
+
+    /** ExpFunc */
+    public static class ExpFunc implements ExpansionFunction {
+      @Override
+      public String[] getExpansion(IsolatedOptionsData optionsData) {
+        return new String[] {"--expands"};
+      }
+    }
+
+    @Option(name = "expands_by_function", defaultValue = "null", expansionFunction = ExpFunc.class)
+    public Void expandsByFunction;
+  }
+
+  @Test
+  public void describeOptionsWithExpansion() throws Exception {
+    // We have to test this here rather than in OptionsTest because expansion functions require
+    // that an options parser be constructed.
+    OptionsParser parser = OptionsParser.newOptionsParser(ExpansionOptions.class);
+    String usage =
+        parser.describeOptions(ImmutableMap.<String, String>of(), OptionsParser.HelpVerbosity.LONG);
+    assertThat(usage).contains("  --expands\n    Expands to: --underlying=from_expansion");
+    assertThat(usage).contains("  --expands_by_function\n    Expands to: --expands");
   }
 
   @Test
   public void overrideExpansionWithExplicit() throws Exception {
     OptionsParser parser = OptionsParser.newOptionsParser(ExpansionOptions.class);
-    parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--first", "--second=second"));
+    parser.parse(
+        OptionPriority.COMMAND_LINE, null, Arrays.asList("--expands", "--underlying=direct_value"));
     ExpansionOptions options = parser.getOptions(ExpansionOptions.class);
-    assertEquals("second", options.second);
+    assertEquals("direct_value", options.underlying);
     assertEquals(0, parser.getWarnings().size());
   }
 
   @Test
   public void overrideExplicitWithExpansion() throws Exception {
     OptionsParser parser = OptionsParser.newOptionsParser(ExpansionOptions.class);
-    parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--second=second", "--first"));
+    parser.parse(
+        OptionPriority.COMMAND_LINE, null, Arrays.asList("--underlying=direct_value", "--expands"));
     ExpansionOptions options = parser.getOptions(ExpansionOptions.class);
-    assertEquals("first", options.second);
+    assertEquals("from_expansion", options.underlying);
   }
 
   @Test
@@ -978,60 +1190,42 @@ public class OptionsParserTest {
   }
 
   public static class ExpansionWarningOptions extends OptionsBase {
-    @Option(name = "first",
-            expansion = "--second=other",
-            defaultValue = "null")
+    @Option(
+      name = "first",
+      expansion = "--underlying=other",
+      defaultValue = "null"
+    )
     public Void first;
 
-    @Option(name = "second",
-            defaultValue = "null")
-    public String second;
+    @Option(
+      name = "second",
+      expansion = "--underlying=other",
+      defaultValue = "null"
+    )
+    public Void second;
+
+    @Option(
+      name = "underlying",
+      defaultValue = "null"
+    )
+    public String underlying;
   }
 
   @Test
   public void warningForExpansionOverridingExplicitOption() throws Exception {
     OptionsParser parser = OptionsParser.newOptionsParser(ExpansionWarningOptions.class);
-    parser.parse("--second=second", "--first");
-    assertThat(parser.getWarnings())
-        .containsExactly("The option 'first' was expanded and now overrides a "
-                         + "previous explicitly specified option 'second'");
-  }
-
-  public static class InvalidOptionConverter extends OptionsBase {
-    @Option(name = "foo",
-            converter = StringConverter.class,
-            defaultValue = "1")
-    public Integer foo;
+    parser.parse("--underlying=underlying", "--first");
+    assertThat(parser.getWarnings()).containsExactly(
+        "The option 'first' was expanded and now overrides a "
+        + "previous explicitly specified option 'underlying'");
   }
 
   @Test
-  public void errorForInvalidOptionConverter() throws Exception {
-    try {
-      OptionsParser.newOptionsParser(InvalidOptionConverter.class);
-    } catch (AssertionError e) {
-      // Expected exception
-      return;
-    }
-    fail();
-  }
-
-  public static class InvalidListOptionConverter extends OptionsBase {
-    @Option(name = "foo",
-            converter = StringConverter.class,
-            defaultValue = "1",
-            allowMultiple = true)
-    public List<Integer> foo;
-  }
-
-  @Test
-  public void errorForInvalidListOptionConverter() throws Exception {
-    try {
-      OptionsParser.newOptionsParser(InvalidListOptionConverter.class);
-    } catch (AssertionError e) {
-      // Expected exception
-      return;
-    }
-    fail();
+  public void warningForTwoConflictingExpansionOptions() throws Exception {
+    OptionsParser parser = OptionsParser.newOptionsParser(ExpansionWarningOptions.class);
+    parser.parse("--first", "--second");
+    assertThat(parser.getWarnings()).containsExactly(
+        "The option 'underlying' was expanded to from both options 'first' " + "and 'second'");
   }
 
   // This test is here to make sure that nobody accidentally changes the
@@ -1058,19 +1252,25 @@ public class OptionsParserTest {
             defaultValue = "beta")
     public String beta;
 
-    @Option(name = "gamma",
-        category = "undocumented",
-        defaultValue = "gamma")
+    @Option(
+      name = "gamma",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      defaultValue = "gamma"
+    )
     public String gamma;
 
-    @Option(name = "delta",
-        category = "undocumented",
-        defaultValue = "delta")
+    @Option(
+      name = "delta",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      defaultValue = "delta"
+    )
     public String delta;
 
-    @Option(name = "echo",
-        category = "hidden",
-        defaultValue = "echo")
+    @Option(
+      name = "echo",
+      optionUsageRestrictions = OptionUsageRestrictions.HIDDEN,
+      defaultValue = "echo"
+    )
     public String echo;
   }
 
@@ -1209,7 +1409,7 @@ public class OptionsParserTest {
   public void illegalListType() throws Exception {
     try {
       OptionsParser.newOptionsParser(IllegalListTypeExample.class);
-    } catch (AssertionError e) {
+    } catch (ConstructionException e) {
       // Expected exception
       return;
     }
@@ -1382,25 +1582,22 @@ public class OptionsParserTest {
         Arrays.asList("--new_name=foo"), canonicalize(OldNameExample.class, "--old_name=foo"));
   }
 
-  public static class OldNameConflictExample extends OptionsBase {
-    @Option(name = "new_name",
-            oldName = "old_name",
-            defaultValue = "defaultValue")
-    public String flag1;
-
-    @Option(name = "old_name",
-            defaultValue = "defaultValue")
-    public String flag2;
+  public static class ExampleBooleanFooOptions extends OptionsBase {
+    @Option(name = "foo", defaultValue = "false")
+    public boolean foo;
   }
 
   @Test
-  public void testOldNameConflict() {
-    try {
-      newOptionsParser(OldNameConflictExample.class);
-      fail("old_name should conflict with the flag already named old_name");
-    } catch (DuplicateOptionDeclarationException e) {
-      // expected
-    }
+  public void testBooleanUnderscorePrefixError() throws OptionsParsingException {
+    OptionsParser parser = newOptionsParser(ExampleBooleanFooOptions.class);
+    parser.parse("--no_foo");
+    ExampleBooleanFooOptions result = parser.getOptions(ExampleBooleanFooOptions.class);
+    assertThat(result.foo).isFalse();
+    List<String> warning = parser.getWarnings();
+    assertThat(warning).hasSize(1);
+    assertThat(warning.get(0)).contains("Option 'foo' is specified using the deprecated "
+          + "--no_ prefix. Use --no without the underscore instead");
+
   }
 
   public static class WrapperOptionExample extends OptionsBase {
@@ -1446,6 +1643,142 @@ public class OptionsParserTest {
     List<String> canonicalized = canonicalize(WrapperOptionExample.class,
         "--wrapper=--flag1=true", "--wrapper=--flag2=87", "--wrapper=--flag3=bar");
     assertEquals(Arrays.asList("--flag1=true", "--flag2=87", "--flag3=bar"), canonicalized);
+  }
+
+  /** Dummy options that declares it uses only core types. */
+  @UsesOnlyCoreTypes
+  public static class CoreTypesOptions extends OptionsBase implements Serializable {
+    @Option(name = "foo", defaultValue = "false")
+    public boolean foo;
+
+    @Option(name = "bar", defaultValue = "abc")
+    public String bar;
+  }
+
+  /** Dummy options that does not declare using only core types. */
+  public static class NonCoreTypesOptions extends OptionsBase {
+    @Option(name = "foo", defaultValue = "false")
+    public boolean foo;
+  }
+
+  /** Dummy options that incorrectly claims to use only core types. */
+  @UsesOnlyCoreTypes
+  public static class BadCoreTypesOptions extends OptionsBase {
+    /** Dummy unsafe type. */
+    public static class Foo {
+      public int i = 0;
+    }
+
+    /** Converter for Foo. */
+    public static class FooConverter implements Converter<Foo> {
+      @Override
+      public Foo convert(String input) throws OptionsParsingException {
+        Foo foo = new Foo();
+        foo.i = Integer.parseInt(input);
+        return foo;
+      }
+
+      @Override
+      public String getTypeDescription() {
+        return "a foo";
+      }
+    }
+
+    @Option(name = "foo", defaultValue = "null", converter = FooConverter.class)
+    public Foo foo;
+  }
+
+  /** Dummy options that is unsafe for @UsesOnlyCoreTypes but doesn't use the annotation. */
+  public static class SuperBadCoreTypesOptions extends OptionsBase {
+    @Option(name = "foo", defaultValue = "null", converter = BadCoreTypesOptions.FooConverter.class)
+    public BadCoreTypesOptions.Foo foo;
+  }
+
+  /**
+   * Dummy options that illegally advertises @UsesOnlyCoreTypes, when its direct fields are fine but
+   * its inherited fields are not.
+   */
+  @UsesOnlyCoreTypes
+  public static class InheritedBadCoreTypesOptions extends SuperBadCoreTypesOptions {
+    @Option(name = "bar", defaultValue = "false")
+    public boolean bar;
+  }
+
+  @Test
+  public void testUsesOnlyCoreTypes() {
+    assertThat(OptionsParser.getUsesOnlyCoreTypes(CoreTypesOptions.class)).isTrue();
+    assertThat(OptionsParser.getUsesOnlyCoreTypes(NonCoreTypesOptions.class)).isFalse();
+  }
+
+  @Test
+  public void testValidationOfUsesOnlyCoreTypes() {
+    try {
+      OptionsParser.getUsesOnlyCoreTypes(BadCoreTypesOptions.class);
+      fail("Should have detected illegal use of @UsesOnlyCoreTypes");
+    } catch (OptionsParser.ConstructionException expected) {
+      assertThat(expected.getMessage()).matches(
+          "Options class '.*BadCoreTypesOptions' is marked as @UsesOnlyCoreTypes, but field "
+          + "'foo' has type '.*Foo'");
+    }
+  }
+
+  @Test
+  public void testValidationOfUsesOnlyCoreTypes_Inherited() {
+    try {
+      OptionsParser.getUsesOnlyCoreTypes(InheritedBadCoreTypesOptions.class);
+      fail("Should have detected illegal use of @UsesOnlyCoreTypes "
+          + "(due to inheritance from bad superclass)");
+    } catch (OptionsParser.ConstructionException expected) {
+      assertThat(expected.getMessage()).matches(
+          "Options class '.*InheritedBadCoreTypesOptions' is marked as @UsesOnlyCoreTypes, but "
+          + "field 'foo' has type '.*Foo'");
+    }
+  }
+
+  @Test
+  public void serializable() throws Exception {
+    OptionsParser parser = OptionsParser.newOptionsParser(CoreTypesOptions.class);
+    parser.parse("--foo=true", "--bar=xyz");
+    CoreTypesOptions options = parser.getOptions(CoreTypesOptions.class);
+
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    ObjectOutputStream objOut = new ObjectOutputStream(bos);
+    objOut.writeObject(options);
+    objOut.flush();
+    ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
+    ObjectInputStream objIn = new ObjectInputStream(bis);
+    Object obj = objIn.readObject();
+
+    assertThat(obj).isEqualTo(options);
+  }
+
+  @Test
+  public void stableSerialization() throws Exception {
+    // Construct options two different ways to get the same result, and confirm that the serialized
+    // representation is identical.
+    OptionsParser parser1 = OptionsParser.newOptionsParser(CoreTypesOptions.class);
+    parser1.parse("--foo=true", "--bar=xyz");
+    CoreTypesOptions options1 = parser1.getOptions(CoreTypesOptions.class);
+    OptionsParser parser2 = OptionsParser.newOptionsParser(CoreTypesOptions.class);
+    parser2.parse("--bar=abc", "--foo=1");
+    CoreTypesOptions options2 = parser2.getOptions(CoreTypesOptions.class);
+    options2.bar = "xyz";
+
+    // We use two different pairs of streams because ObjectOutputStream#reset does not actually
+    // wipe all the internal state. (The first time it's used, there's an additional header that
+    // does not reappear afterwards.)
+    ByteArrayOutputStream bos1 = new ByteArrayOutputStream();
+    ObjectOutputStream objOut1 = new ObjectOutputStream(bos1);
+    objOut1.writeObject(options1);
+    objOut1.flush();
+    byte[] data1 = bos1.toByteArray();
+    ByteArrayOutputStream bos2 = new ByteArrayOutputStream();
+    ObjectOutputStream objOut2 = new ObjectOutputStream(bos2);
+    objOut2.writeObject(options2);
+    objOut2.flush();
+    byte[] data2 = bos2.toByteArray();
+
+    assertThat(data1).isEqualTo(data2);
   }
 }
 

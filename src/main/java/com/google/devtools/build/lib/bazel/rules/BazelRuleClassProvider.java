@@ -27,9 +27,8 @@ import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.RuleSe
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.ConfigRuleClasses;
 import com.google.devtools.build.lib.analysis.constraints.EnvironmentRule;
-import com.google.devtools.build.lib.bazel.rules.BazelToolchainLookup.BazelToolchainLookupRule;
+import com.google.devtools.build.lib.bazel.rules.BazelToolchainType.BazelToolchainTypeRule;
 import com.google.devtools.build.lib.bazel.rules.android.AndroidNdkRepositoryRule;
 import com.google.devtools.build.lib.bazel.rules.android.AndroidSdkRepositoryRule;
 import com.google.devtools.build.lib.bazel.rules.android.BazelAarImportRule;
@@ -77,7 +76,6 @@ import com.google.devtools.build.lib.bazel.rules.workspace.NewGitRepositoryRule;
 import com.google.devtools.build.lib.bazel.rules.workspace.NewHttpArchiveRule;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.ideinfo.AndroidStudioInfoAspect;
-import com.google.devtools.build.lib.ideinfo.BazelAndroidStudioInfoSemantics;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.PackageGroup;
@@ -88,12 +86,12 @@ import com.google.devtools.build.lib.rules.AliasProvider;
 import com.google.devtools.build.lib.rules.android.AarImportBaseRule;
 import com.google.devtools.build.lib.rules.android.AndroidBinaryOnlyRule;
 import com.google.devtools.build.lib.rules.android.AndroidConfiguration;
+import com.google.devtools.build.lib.rules.android.AndroidDeviceRule;
 import com.google.devtools.build.lib.rules.android.AndroidLibraryBaseRule;
 import com.google.devtools.build.lib.rules.android.AndroidNeverlinkAspect;
 import com.google.devtools.build.lib.rules.android.AndroidRuleClasses;
 import com.google.devtools.build.lib.rules.android.AndroidSkylarkCommon;
 import com.google.devtools.build.lib.rules.android.DexArchiveAspect;
-import com.google.devtools.build.lib.rules.android.JackAspect;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.AppleToolchain;
@@ -102,6 +100,9 @@ import com.google.devtools.build.lib.rules.apple.XcodeVersionRule;
 import com.google.devtools.build.lib.rules.apple.cpp.AppleCcToolchainRule;
 import com.google.devtools.build.lib.rules.apple.swift.SwiftCommandLineOptions;
 import com.google.devtools.build.lib.rules.apple.swift.SwiftConfiguration;
+import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagConfiguration;
+import com.google.devtools.build.lib.rules.config.ConfigRuleClasses;
+import com.google.devtools.build.lib.rules.config.ConfigSkylarkCommon;
 import com.google.devtools.build.lib.rules.cpp.CcIncLibraryRule;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainRule;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainSuiteRule;
@@ -156,10 +157,10 @@ import com.google.devtools.build.lib.rules.objc.ObjcProtoAspect;
 import com.google.devtools.build.lib.rules.objc.ObjcProtoLibraryRule;
 import com.google.devtools.build.lib.rules.objc.ObjcProvider;
 import com.google.devtools.build.lib.rules.objc.ObjcRuleClasses;
-import com.google.devtools.build.lib.rules.objc.ObjcXcodeprojRule;
 import com.google.devtools.build.lib.rules.objc.XcTestAppProvider;
 import com.google.devtools.build.lib.rules.platform.ConstraintSettingRule;
 import com.google.devtools.build.lib.rules.platform.ConstraintValueRule;
+import com.google.devtools.build.lib.rules.platform.PlatformCommon;
 import com.google.devtools.build.lib.rules.platform.PlatformRule;
 import com.google.devtools.build.lib.rules.proto.BazelProtoLibraryRule;
 import com.google.devtools.build.lib.rules.proto.ProtoConfiguration;
@@ -280,7 +281,8 @@ public class BazelRuleClassProvider {
     BAZEL_SETUP.init(builder);
     CORE_RULES.init(builder);
     CORE_WORKSPACE_RULES.init(builder);
-    BASIC_RULES.init(builder);
+    GENERIC_RULES.init(builder);
+    CONFIG_RULES.init(builder);
     PLATFORM_RULES.init(builder);
     PROTO_RULES.init(builder);
     SH_RULES.init(builder);
@@ -298,7 +300,7 @@ public class BazelRuleClassProvider {
 
     // These rules are a little special: they need to depend on every configuration fragment that
     // has Make variables, so we can't put them in any of the above buckets.
-    builder.addRuleDefinition(new BazelToolchainLookupRule());
+    builder.addRuleDefinition(new BazelToolchainTypeRule());
     builder.addRuleDefinition(new GenRuleBaseRule());
     builder.addRuleDefinition(new BazelGenRuleRule());
   }
@@ -350,6 +352,8 @@ public class BazelRuleClassProvider {
           builder.addRuleDefinition(new ConstraintSettingRule());
           builder.addRuleDefinition(new ConstraintValueRule());
           builder.addRuleDefinition(new PlatformRule());
+
+          builder.addSkylarkAccessibleTopLevels("platform_common", new PlatformCommon());
         }
 
         @Override
@@ -358,14 +362,11 @@ public class BazelRuleClassProvider {
         }
       };
 
-  public static final RuleSet BASIC_RULES =
+  public static final RuleSet GENERIC_RULES =
       new RuleSet() {
         @Override
         public void init(Builder builder) {
           builder.addRuleDefinition(new EnvironmentRule());
-
-          builder.addRuleDefinition(new ConfigRuleClasses.ConfigBaseRule());
-          builder.addRuleDefinition(new ConfigRuleClasses.ConfigSettingRule());
 
           builder.addRuleDefinition(new AliasRule());
           builder.addRuleDefinition(new BazelFilegroupRule());
@@ -378,6 +379,26 @@ public class BazelRuleClassProvider {
           } catch (IOException e) {
             throw new IllegalStateException(e);
           }
+        }
+
+        @Override
+        public ImmutableList<RuleSet> requires() {
+          return ImmutableList.of(CORE_RULES);
+        }
+      };
+
+  public static final RuleSet CONFIG_RULES =
+      new RuleSet() {
+        @Override
+        public void init(Builder builder) {
+          builder.addRuleDefinition(new ConfigRuleClasses.ConfigBaseRule());
+          builder.addRuleDefinition(new ConfigRuleClasses.ConfigSettingRule());
+
+          builder.addConfig(
+              ConfigFeatureFlagConfiguration.Options.class,
+              new ConfigFeatureFlagConfiguration.Loader());
+          builder.addRuleDefinition(new ConfigRuleClasses.ConfigFeatureFlagRule());
+          builder.addSkylarkAccessibleTopLevels("config_common", new ConfigSkylarkCommon());
         }
 
         @Override
@@ -561,10 +582,8 @@ public class BazelRuleClassProvider {
 
           AndroidNeverlinkAspect androidNeverlinkAspect = new AndroidNeverlinkAspect();
           DexArchiveAspect dexArchiveAspect = new DexArchiveAspect(toolsRepository);
-          JackAspect jackAspect = new JackAspect(toolsRepository);
           builder.addNativeAspectClass(androidNeverlinkAspect);
           builder.addNativeAspectClass(dexArchiveAspect);
-          builder.addNativeAspectClass(jackAspect);
 
           builder.addRuleDefinition(new AndroidRuleClasses.AndroidSdkRule());
           builder.addRuleDefinition(new BazelAndroidToolsDefaultsJarRule());
@@ -573,13 +592,14 @@ public class BazelRuleClassProvider {
           builder.addRuleDefinition(new AndroidRuleClasses.AndroidResourceSupportRule());
           builder.addRuleDefinition(
               new AndroidRuleClasses.AndroidBinaryBaseRule(
-                  androidNeverlinkAspect, dexArchiveAspect, jackAspect));
+                  androidNeverlinkAspect, dexArchiveAspect));
           builder.addRuleDefinition(new AndroidBinaryOnlyRule());
-          builder.addRuleDefinition(new AndroidLibraryBaseRule(androidNeverlinkAspect, jackAspect));
+          builder.addRuleDefinition(new AndroidLibraryBaseRule(androidNeverlinkAspect));
           builder.addRuleDefinition(new BazelAndroidLibraryRule());
           builder.addRuleDefinition(new BazelAndroidBinaryRule());
           builder.addRuleDefinition(new AarImportBaseRule());
           builder.addRuleDefinition(new BazelAarImportRule());
+          builder.addRuleDefinition(new AndroidDeviceRule());
 
           builder.addSkylarkAccessibleTopLevels("android_common", new AndroidSkylarkCommon());
           builder.addSkylarkAccessibleTopLevels(
@@ -644,11 +664,11 @@ public class BazelRuleClassProvider {
           // TODO(ulfjack): Depending on objcProtoAspect from here is a layering violation.
           ObjcProtoAspect objcProtoAspect = new ObjcProtoAspect();
           builder.addNativeAspectClass(objcProtoAspect);
+          builder.addRuleDefinition(new AppleBinaryRule(objcProtoAspect));
+          builder.addRuleDefinition(new AppleStaticLibraryRule(objcProtoAspect));
           builder.addRuleDefinition(new ObjcProtoLibraryRule(objcProtoAspect));
 
-          builder.addRuleDefinition(new AppleBinaryRule(objcProtoAspect));
           builder.addRuleDefinition(new AppleCcToolchainRule());
-          builder.addRuleDefinition(new AppleStaticLibraryRule());
           builder.addRuleDefinition(new AppleToolchain.RequiresXcodeConfigRule(toolsRepository));
           builder.addRuleDefinition(new AppleWatch1ExtensionRule());
           builder.addRuleDefinition(new AppleWatch2ExtensionRule());
@@ -667,7 +687,6 @@ public class BazelRuleClassProvider {
           builder.addRuleDefinition(new ObjcFrameworkRule());
           builder.addRuleDefinition(new ObjcImportRule());
           builder.addRuleDefinition(new ObjcLibraryRule());
-          builder.addRuleDefinition(new ObjcXcodeprojRule());
           builder.addRuleDefinition(new ObjcRuleClasses.CoptsRule());
           builder.addRuleDefinition(new ObjcRuleClasses.BundlingRule());
           builder.addRuleDefinition(new ObjcRuleClasses.DylibDependingRule(objcProtoAspect));
@@ -729,9 +748,7 @@ public class BazelRuleClassProvider {
       new RuleSet() {
         @Override
         public void init(Builder builder) {
-          String toolsRepository = checkNotNull(builder.getToolsRepository());
-          AndroidStudioInfoAspect androidStudioInfoAspect =
-              new AndroidStudioInfoAspect(toolsRepository, new BazelAndroidStudioInfoSemantics());
+          AndroidStudioInfoAspect androidStudioInfoAspect = new AndroidStudioInfoAspect();
           builder.addNativeAspectClass(androidStudioInfoAspect);
         }
 

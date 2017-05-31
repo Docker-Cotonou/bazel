@@ -246,6 +246,15 @@ public class CppLinkActionTest extends BuildViewTestCase {
     assertThat(linkAction.getEnvironment()).containsEntry("foo", "bar");
   }
 
+  private enum NonStaticAttributes {
+    OUTPUT_FILE,
+    COMPILATION_INPUTS,
+    NATIVE_DEPS,
+    USE_TEST_ONLY_FLAGS,
+    FAKE,
+    RUNTIME_SOLIB_DIR
+  }
+
   /**
    * This mainly checks that non-static links don't have identical keys. Many options are only
    * allowed on non-static links, and we test several of them here.
@@ -253,8 +262,8 @@ public class CppLinkActionTest extends BuildViewTestCase {
   @Test
   public void testComputeKeyNonStatic() throws Exception {
     final RuleContext ruleContext = createDummyRuleContext();
-    final PathFragment exeOutputPath = new PathFragment("dummyRuleContext/output/path");
-    final PathFragment dynamicOutputPath = new PathFragment("dummyRuleContext/output/path.so");
+    final PathFragment exeOutputPath = PathFragment.create("dummyRuleContext/output/path");
+    final PathFragment dynamicOutputPath = PathFragment.create("dummyRuleContext/output/path.so");
     final Artifact staticOutputFile = getBinArtifactWithNoOwner(exeOutputPath.getPathString());
     final Artifact dynamicOutputFile = getBinArtifactWithNoOwner(dynamicOutputPath.getPathString());
     final Artifact oFile = getSourceArtifact("cc/a.o");
@@ -262,35 +271,49 @@ public class CppLinkActionTest extends BuildViewTestCase {
     final FeatureConfiguration featureConfiguration = getMockFeatureConfiguration();
 
     ActionTester.runTest(
-        64,
-        new ActionCombinationFactory() {
+        NonStaticAttributes.class,
+        new ActionCombinationFactory<NonStaticAttributes>() {
 
           @Override
-          public Action generate(int i) throws InterruptedException {
+          public Action generate(ImmutableSet<NonStaticAttributes> attributesToFlip)
+              throws InterruptedException {
             CppLinkActionBuilder builder =
                 new CppLinkActionBuilder(
                     ruleContext,
-                    (i & 2) == 0 ? dynamicOutputFile : staticOutputFile,
+                    attributesToFlip.contains(NonStaticAttributes.OUTPUT_FILE)
+                        ? dynamicOutputFile
+                        : staticOutputFile,
                     CppHelper.getToolchain(ruleContext, ":cc_toolchain"),
                     CppHelper.getFdoSupport(ruleContext, ":cc_toolchain")) {};
             builder.addCompilationInputs(
-                (i & 1) == 0 ? ImmutableList.of(oFile) : ImmutableList.of(oFile2));
-            if ((i & 2) == 0) {
+                attributesToFlip.contains(NonStaticAttributes.COMPILATION_INPUTS)
+                    ? ImmutableList.of(oFile)
+                    : ImmutableList.of(oFile2));
+            if (attributesToFlip.contains(NonStaticAttributes.OUTPUT_FILE)) {
               builder.setLinkType(LinkTargetType.DYNAMIC_LIBRARY);
               builder.setLibraryIdentifier("foo");
             } else {
               builder.setLinkType(LinkTargetType.EXECUTABLE);
             }
             builder.setLinkStaticness(LinkStaticness.DYNAMIC);
-            builder.setNativeDeps((i & 4) == 0);
-            builder.setUseTestOnlyFlags((i & 8) == 0);
-            builder.setFake((i & 16) == 0);
-            builder.setRuntimeSolibDir((i & 32) == 0 ? null : new PathFragment("so1"));
+            builder.setNativeDeps(attributesToFlip.contains(NonStaticAttributes.NATIVE_DEPS));
+            builder.setUseTestOnlyFlags(
+                attributesToFlip.contains(NonStaticAttributes.USE_TEST_ONLY_FLAGS));
+            builder.setFake(attributesToFlip.contains(NonStaticAttributes.FAKE));
+            builder.setRuntimeSolibDir(
+                attributesToFlip.contains(NonStaticAttributes.RUNTIME_SOLIB_DIR)
+                    ? null
+                    : PathFragment.create("so1"));
             builder.setFeatureConfiguration(featureConfiguration);
 
             return builder.build();
           }
         });
+  }
+
+  private enum StaticKeyAttributes {
+    OUTPUT_FILE,
+    COMPILATION_INPUTS
   }
 
   /**
@@ -300,8 +323,8 @@ public class CppLinkActionTest extends BuildViewTestCase {
   @Test
   public void testComputeKeyStatic() throws Exception {
     final RuleContext ruleContext = createDummyRuleContext();
-    final PathFragment staticOutputPath = new PathFragment("dummyRuleContext/output/path.a");
-    final PathFragment dynamicOutputPath = new PathFragment("dummyRuleContext/output/path.so");
+    final PathFragment staticOutputPath = PathFragment.create("dummyRuleContext/output/path.a");
+    final PathFragment dynamicOutputPath = PathFragment.create("dummyRuleContext/output/path.so");
     final Artifact staticOutputFile = getBinArtifactWithNoOwner(staticOutputPath.getPathString());
     final Artifact dynamicOutputFile = getBinArtifactWithNoOwner(dynamicOutputPath.getPathString());
     final Artifact oFile = getSourceArtifact("cc/a.o");
@@ -309,21 +332,28 @@ public class CppLinkActionTest extends BuildViewTestCase {
     final FeatureConfiguration featureConfiguration = getMockFeatureConfiguration();
 
     ActionTester.runTest(
-        4,
-        new ActionCombinationFactory() {
+        StaticKeyAttributes.class,
+        new ActionCombinationFactory<StaticKeyAttributes>() {
 
           @Override
-          public Action generate(int i) throws InterruptedException {
+          public Action generate(ImmutableSet<StaticKeyAttributes> attributes)
+              throws InterruptedException {
             CppLinkActionBuilder builder =
                 new CppLinkActionBuilder(
                     ruleContext,
-                    (i & 2) == 0 ? staticOutputFile : dynamicOutputFile,
+                    attributes.contains(StaticKeyAttributes.OUTPUT_FILE)
+                        ? staticOutputFile
+                        : dynamicOutputFile,
                     CppHelper.getToolchain(ruleContext, ":cc_toolchain"),
                     CppHelper.getFdoSupport(ruleContext, ":cc_toolchain")) {};
             builder.addCompilationInputs(
-                (i & 1) == 0 ? ImmutableList.of(oFile) : ImmutableList.of(oFile2));
+                attributes.contains(StaticKeyAttributes.COMPILATION_INPUTS)
+                    ? ImmutableList.of(oFile)
+                    : ImmutableList.of(oFile2));
             builder.setLinkType(
-                (i & 2) == 0 ? LinkTargetType.STATIC_LIBRARY : LinkTargetType.DYNAMIC_LIBRARY);
+                attributes.contains(StaticKeyAttributes.OUTPUT_FILE)
+                    ? LinkTargetType.STATIC_LIBRARY
+                    : LinkTargetType.DYNAMIC_LIBRARY);
             builder.setLibraryIdentifier("foo");
             builder.setFeatureConfiguration(featureConfiguration);
             return builder.build();
@@ -335,11 +365,11 @@ public class CppLinkActionTest extends BuildViewTestCase {
   public void testCommandLineSplitting() throws Exception {
     RuleContext ruleContext = createDummyRuleContext();
     Artifact output = getDerivedArtifact(
-        new PathFragment("output/path.xyz"), getTargetConfiguration().getBinDirectory(
+        PathFragment.create("output/path.xyz"), getTargetConfiguration().getBinDirectory(
             RepositoryName.MAIN),
         ActionsTestUtil.NULL_ARTIFACT_OWNER);
     final Artifact outputIfso = getDerivedArtifact(
-        new PathFragment("output/path.ifso"), getTargetConfiguration().getBinDirectory(
+        PathFragment.create("output/path.ifso"), getTargetConfiguration().getBinDirectory(
             RepositoryName.MAIN),
         ActionsTestUtil.NULL_ARTIFACT_OWNER);
     CppLinkActionBuilder builder =
@@ -431,7 +461,7 @@ public class CppLinkActionTest extends BuildViewTestCase {
         new CppLinkActionBuilder(
                 ruleContext,
                 new Artifact(
-                    new PathFragment(outputPath),
+                    PathFragment.create(outputPath),
                     getTargetConfiguration()
                         .getBinDirectory(ruleContext.getRule().getRepository())),
                 ruleContext.getConfiguration(),
@@ -450,7 +480,7 @@ public class CppLinkActionTest extends BuildViewTestCase {
   }
 
   private CppLinkActionBuilder createLinkBuilder(Link.LinkTargetType type) throws Exception {
-    PathFragment output = new PathFragment("dummyRuleContext/output/path.a");
+    PathFragment output = PathFragment.create("dummyRuleContext/output/path.a");
     return createLinkBuilder(
         type,
         output.getPathString(),

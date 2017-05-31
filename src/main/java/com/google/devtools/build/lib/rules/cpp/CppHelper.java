@@ -60,6 +60,8 @@ import javax.annotation.Nullable;
  * <p>This class can be used only after the loading phase.
  */
 public class CppHelper {
+  static final PathFragment OBJS = PathFragment.create("_objs");
+
   private static final String GREPPED_INCLUDES_SUFFIX = ".includes";
 
   // TODO(bazel-team): should this use Link.SHARED_LIBRARY_FILETYPES?
@@ -241,7 +243,7 @@ public class CppHelper {
   public static NestedSet<Artifact> getGcovFilesIfNeeded(
       RuleContext ruleContext, CcToolchainProvider toolchain) {
     if (ruleContext.getConfiguration().isCodeCoverageEnabled()) {
-      return toolchain.getCrosstool();
+      return toolchain.getCoverage();
     } else {
       return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
     }
@@ -283,7 +285,7 @@ public class CppHelper {
    * Returns the directory where object files are created.
    */
   public static PathFragment getObjDirectory(Label ruleLabel) {
-    return AnalysisUtils.getUniqueDirectory(ruleLabel, new PathFragment("_objs"));
+    return AnalysisUtils.getUniqueDirectory(ruleLabel, OBJS);
   }
 
   /**
@@ -360,7 +362,7 @@ public class CppHelper {
       BuildConfiguration config,
       LinkTargetType linkType,
       String linkedArtifactNameSuffix) {
-    PathFragment name = new PathFragment(ruleContext.getLabel().getName());
+    PathFragment name = PathFragment.create(ruleContext.getLabel().getName());
     if (linkType != LinkTargetType.EXECUTABLE) {
       name = name.replaceName(
           "lib" + name.getBaseName() + linkedArtifactNameSuffix  + linkType.getExtension());
@@ -396,8 +398,8 @@ public class CppHelper {
       NestedSetBuilder<IncludeScannable> scannableBuilder) {
 
     TransitiveLipoInfoProvider stl = null;
-    if (ruleContext.getRule().getAttributeDefinition(":stl") != null &&
-        ruleContext.getPrerequisite(":stl", Mode.TARGET) != null) {
+    if (ruleContext.getRule().getAttributeDefinition(":stl") != null
+        && ruleContext.getPrerequisite(":stl", Mode.TARGET) != null) {
       // If the attribute is defined, it is never null.
       stl = ruleContext.getPrerequisite(":stl", Mode.TARGET)
           .getProvider(TransitiveLipoInfoProvider.class);

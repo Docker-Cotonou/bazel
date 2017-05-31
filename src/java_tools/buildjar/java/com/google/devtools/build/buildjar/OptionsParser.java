@@ -83,6 +83,8 @@ public final class OptionsParser {
 
   private String ruleKind;
   private String targetLabel;
+  
+  private boolean testOnly;
 
   /**
    * Constructs an {@code OptionsParser} from a list of command args. Sets the same JavacRunner for
@@ -109,7 +111,6 @@ public final class OptionsParser {
           // otherwise we have to do something like adding a "--"
           // terminator to the passed arguments.
           collectFlagArguments(javacOpts, argQueue, "--");
-          bootClassPathFromJavacOpts();
           sourcePathFromJavacOpts();
           break;
         case "--direct_dependency":
@@ -212,8 +213,23 @@ public final class OptionsParser {
         case "--target_label":
           targetLabel = getArgument(argQueue, arg);
           break;
+        case "--testonly":
+          testOnly = true;
+          break;
         default:
           throw new InvalidCommandLineException("unknown option : '" + arg + "'");
+      }
+    }
+  }
+
+  private void sourcePathFromJavacOpts() {
+    Iterator<String> it = javacOpts.iterator();
+    while (it.hasNext()) {
+      String curr = it.next();
+      if (curr.equals("-sourcepath") && it.hasNext()) {
+        it.remove();
+        sourcePath = it.next();
+        it.remove();
       }
     }
   }
@@ -255,7 +271,9 @@ public final class OptionsParser {
    * @throws java.io.IOException if one of the files containing options cannot be read.
    */
   private static void expandArgument(Deque<String> expanded, String arg) throws IOException {
-    if (arg.startsWith("@") && !arg.startsWith("@@")) {
+    if (arg.startsWith("@@")) {
+      expanded.add(arg.substring(1));
+    } else if (arg.startsWith("@")) {
       for (String line : Files.readAllLines(Paths.get(arg.substring(1)), UTF_8)) {
         if (line.length() > 0) {
           expandArgument(expanded, line);
@@ -323,32 +341,6 @@ public final class OptionsParser {
     List<String> arguments = new ArrayList<>();
     collectFlagArguments(arguments, args, "--");
     postProcessors.put(processorName, arguments);
-  }
-
-  // TODO(cushon): update Blaze to set --bootclasspath directly
-  private void bootClassPathFromJavacOpts() {
-    Iterator<String> it = javacOpts.iterator();
-    while (it.hasNext()) {
-      String curr = it.next();
-      if (curr.equals("-bootclasspath") && it.hasNext()) {
-        it.remove();
-        bootClassPath = it.next();
-        it.remove();
-      }
-    }
-  }
-
-  // TODO(#970): Delete that function (either set --sourcepath from Bazel or just drop support).
-  private void sourcePathFromJavacOpts() {
-    Iterator<String> it = javacOpts.iterator();
-    while (it.hasNext()) {
-      String curr = it.next();
-      if (curr.equals("-sourcepath") && it.hasNext()) {
-        it.remove();
-        sourcePath = it.next();
-        it.remove();
-      }
-    }
   }
 
   public List<String> getJavacOpts() {
@@ -469,5 +461,9 @@ public final class OptionsParser {
 
   public String getTargetLabel() {
     return targetLabel;
+  }
+  
+  public boolean testOnly() {
+    return testOnly;
   }
 }

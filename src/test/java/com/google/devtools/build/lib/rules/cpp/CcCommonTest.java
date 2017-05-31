@@ -39,13 +39,13 @@ import com.google.devtools.build.lib.analysis.mock.BazelAnalysisMock;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider;
-import com.google.devtools.build.lib.bazel.rules.BazelToolchainLookup;
+import com.google.devtools.build.lib.bazel.rules.BazelToolchainType;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.flags.InvocationPolicyEnforcer;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.rules.ToolchainLookup;
+import com.google.devtools.build.lib.rules.ToolchainType;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.OsUtils;
@@ -410,7 +410,7 @@ public class CcCommonTest extends BuildViewTestCase {
     String includesRoot = "bang/bang_includes";
     assertThat(foo.getProvider(CppCompilationContext.class).getSystemIncludeDirs())
         .containsAllOf(
-            new PathFragment(includesRoot),
+            PathFragment.create(includesRoot),
             targetConfig.getGenfilesFragment().getRelative(includesRoot));
   }
 
@@ -436,7 +436,7 @@ public class CcCommonTest extends BuildViewTestCase {
     List<PathFragment> expected =
         new ImmutableList.Builder<PathFragment>()
             .addAll(noIncludes.getProvider(CppCompilationContext.class).getSystemIncludeDirs())
-            .add(new PathFragment(includesRoot))
+            .add(PathFragment.create(includesRoot))
             .add(targetConfig.getGenfilesFragment().getRelative(includesRoot))
             .build();
     assertThat(foo.getProvider(CppCompilationContext.class).getSystemIncludeDirs())
@@ -548,7 +548,7 @@ public class CcCommonTest extends BuildViewTestCase {
     getSkyframeExecutor()
         .invalidateFilesUnderPathForTesting(
             reporter,
-            new ModifiedFileSet.Builder().modify(new PathFragment("WORKSPACE")).build(),
+            new ModifiedFileSet.Builder().modify(PathFragment.create("WORKSPACE")).build(),
             rootDirectory);
     FileSystemUtils.createDirectoryAndParents(scratch.resolve("/foo/bar"));
     scratch.file("/foo/WORKSPACE", "workspace(name = 'pkg')");
@@ -905,10 +905,10 @@ public class CcCommonTest extends BuildViewTestCase {
   }
 
   /**
-   * A {@code toolchain_lookup} rule for testing that only supports C++.
+   * A {@code toolchain_type} rule for testing that only supports C++.
    */
-  public static class OnlyCppToolchainLookup extends ToolchainLookup {
-    public OnlyCppToolchainLookup() {
+  public static class OnlyCppToolchainType extends ToolchainType {
+    public OnlyCppToolchainType() {
       super(
           ImmutableMap.<Label, Class<? extends BuildConfiguration.Fragment>>of(),
           ImmutableMap.<Label, ImmutableMap<String, String>>of());
@@ -916,13 +916,13 @@ public class CcCommonTest extends BuildViewTestCase {
   }
 
   /**
-   * A {@code toolchain_lookup} rule for testing that only supports C++.
+   * A {@code toolchain_type} rule for testing that only supports C++.
    */
-  public static class OnlyCppToolchainLookupRule implements RuleDefinition {
+  public static class OnlyCppToolchainTypeRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
       return builder
-          // This means that *every* toolchain_lookup rule depends on every configuration fragment
+          // This means that *every* toolchain_type rule depends on every configuration fragment
           // that contributes Make variables, regardless of which one it is.
           .requiresConfigurationFragments(CppConfiguration.class)
           .removeAttribute("licenses")
@@ -933,8 +933,8 @@ public class CcCommonTest extends BuildViewTestCase {
     @Override
     public Metadata getMetadata() {
       return Metadata.builder()
-          .name("toolchain_lookup")
-          .factoryClass(BazelToolchainLookup.class)
+          .name("toolchain_type")
+          .factoryClass(BazelToolchainType.class)
           .ancestors(BaseRuleClasses.BaseRule.class)
           .build();
     }
@@ -964,9 +964,9 @@ public class CcCommonTest extends BuildViewTestCase {
           BazelRuleClassProvider.BAZEL_SETUP.init(builder);
           BazelRuleClassProvider.CORE_RULES.init(builder);
           BazelRuleClassProvider.CORE_WORKSPACE_RULES.init(builder);
-          BazelRuleClassProvider.BASIC_RULES.init(builder);
+          BazelRuleClassProvider.GENERIC_RULES.init(builder);
           BazelRuleClassProvider.CPP_RULES.init(builder);
-          builder.addRuleDefinition(new OnlyCppToolchainLookupRule());
+          builder.addRuleDefinition(new OnlyCppToolchainTypeRule());
           return builder.build();
         }
 

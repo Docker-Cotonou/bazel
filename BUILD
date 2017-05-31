@@ -1,5 +1,7 @@
 package(default_visibility = ["//scripts/release:__pkg__"])
 
+exports_files(["LICENSE"])
+
 filegroup(
     name = "git",
     srcs = glob([".git/**"]),
@@ -35,7 +37,6 @@ filegroup(
             "bazel-*",  # convenience symlinks
             "out",  # IntelliJ with setup-intellij.sh
             "output",  # output of compile.sh
-            "WORKSPACE.user.bzl",  # generated workspace file
             ".*",  # mainly .git* files
         ],
     ) + [

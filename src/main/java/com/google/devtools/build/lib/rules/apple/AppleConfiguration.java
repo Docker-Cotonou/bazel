@@ -64,36 +64,6 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
    **/
   public static final String APPLE_SDK_PLATFORM_ENV_NAME = "APPLE_SDK_PLATFORM";
 
-  /**
-   * Rule classes that need a top level transition to the apple crosstool if static configurations
-   * are being used.
-   *
-   * <p>This list must not contain any rule classes that require some other split transition, as
-   * that transition would be suppressed by the top level transition to the apple crosstool. For
-   * example, if "apple_binary" were in this list, the multi-arch transition would not occur.
-   */
-  public static final ImmutableList<String> APPLE_CROSSTOOL_RULE_CLASSES_FOR_STATIC_CONFIGS =
-      ImmutableList.of(
-          "objc_library",
-          "objc_binary",
-          "experimental_objc_library");
-
-  /**
-   * Rule classes that need a top level transition to the apple crosstool.  Dynamic configurations
-   * must be in place until these can be used - for static configurations, use
-   * {@code APPLE_CROSSTOOL_RULE_CLASSES_FOR_STATIC_CONFIGS}.
-   */
-  public static final ImmutableList<String> APPLE_CROSSTOOL_RULE_CLASSES =
-      ImmutableList.of(
-          "apple_binary",
-          "apple_static_library",
-          "apple_watch_extension_binary",
-          "experimental_objc_library",
-          "ios_extension_binary",
-          "ios_test",
-          "objc_binary",
-          "objc_library");
-
   private static final DottedVersion MINIMUM_BITCODE_XCODE_VERSION = DottedVersion.fromString("7");
 
   @Nullable private final DottedVersion xcodeVersion;
@@ -184,6 +154,8 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
       doc = "The minimum compatible OS version for target simulator and devices for a particular "
           + "platform type.")
   public DottedVersion getMinimumOsForPlatformType(PlatformType platformType) {
+    // TODO(b/37240784): Look into using only a single minimum OS flag tied to the current
+    // apple_platform_type.
     switch (platformType) {
       case IOS:
         return iosMinimumOs;
@@ -249,7 +221,7 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
    * their corresponding values.
    */
   @SkylarkCallable(name = "target_apple_env")
-  public Map<String, String> getTargetAppleEnvironment(Platform platform) {
+  public ImmutableMap<String, String> getTargetAppleEnvironment(Platform platform) {
     ImmutableMap.Builder<String, String> mapBuilder = ImmutableMap.builder();
     mapBuilder.putAll(appleTargetPlatformEnv(platform));
     return mapBuilder.build();
@@ -267,7 +239,7 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
           + "build on an apple host system. These environment variables are needed by the apple "
           + "toolchain. Keys are variable names and values are their corresponding values."
     )
-  public Map<String, String> getAppleHostSystemEnv() {
+  public ImmutableMap<String, String> getAppleHostSystemEnv() {
     DottedVersion xcodeVersion = getXcodeVersion();
     if (xcodeVersion != null) {
       return getXcodeVersionEnv(xcodeVersion);
@@ -281,7 +253,7 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
    * a version of xcode to be explicitly declared. Keys are variable names and values are their
    * corresponding values.
    */
-  public Map<String, String> getXcodeVersionEnv(DottedVersion xcodeVersion) {
+  public ImmutableMap<String, String> getXcodeVersionEnv(DottedVersion xcodeVersion) {
     return ImmutableMap.of(AppleConfiguration.XCODE_VERSION_ENV_NAME, xcodeVersion.toString());
   }
 
@@ -568,6 +540,7 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
     if (!appleSplitCpu.isEmpty()) {
       components.add(applePlatformType.toString().toLowerCase());
       components.add(appleSplitCpu);
+      components.add("min" + getMinimumOsForPlatformType(applePlatformType));
     }
     if (shouldDistinguishOutputDirectory()) {
       components.add(configurationDistinguisher.getFileSystemName());
@@ -706,14 +679,23 @@ public class AppleConfiguration extends BuildConfiguration.Fragment {
     FRAMEWORK("framework"),
     /** Split transition distinguisher for {@code apple_watch1_extension} rule. */
     WATCH_OS1_EXTENSION("watch_os1_extension"),
-    /** Distinguisher for {@code apple_binary} rule with "ios" platform_type. */
+    /** Distinguisher for non-extension {@code apple_binary} rule with "ios" platform_type. */
     APPLEBIN_IOS("applebin_ios"),
-    /** Distinguisher for {@code apple_binary} rule with "watchos" platform_type. */
+    /** Distinguisher for non-extension {@code apple_binary} rule with "watchos" platform_type. */
     APPLEBIN_WATCHOS("applebin_watchos"),
-    /** Distinguisher for {@code apple_binary} rule with "tvos" platform_type. */
+    /** Distinguisher for non-extension {@code apple_binary} rule with "tvos" platform_type. */
     APPLEBIN_TVOS("applebin_tvos"),
-    /** Distinguisher for {@code apple_binary} rule with "macos" platform_type. */
+    /** Distinguisher for non-extension {@code apple_binary} rule with "macos" platform_type. */
     APPLEBIN_MACOS("applebin_macos"),
+    /** Distinguisher for extension {@code apple_binary} rule with "ios" platform_type. */
+    APPLEBIN_IOS_EXT("applebin_ios_ext"),
+    /** Distinguisher for extension {@code apple_binary} rule with "watchos" platform_type. */
+    APPLEBIN_WATCHOS_EXT("applebin_watchos_ext"),
+    /** Distinguisher for extension {@code apple_binary} rule with "tvos" platform_type. */
+    APPLEBIN_TVOS_EXT("applebin_tvos_ext"),
+    /** Distinguisher for extension {@code apple_binary} rule with "macos" platform_type. */
+    APPLEBIN_MACOS_EXT("applebin_macos_ext"),
+
     /**
      * Distinguisher for the apple crosstool configuration.  We use "apl" for output directory
      * names instead of "apple_crosstool" to avoid oversized path names, which can be problematic

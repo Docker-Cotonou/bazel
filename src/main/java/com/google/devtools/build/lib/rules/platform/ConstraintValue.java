@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.rules.platform;
 
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
@@ -21,7 +23,11 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.platform.ConstraintSettingInfo;
+import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
+import com.google.devtools.build.lib.util.Preconditions;
 
 /** Defines a potential value of a constraint. */
 public class ConstraintValue implements RuleConfiguredTargetFactory {
@@ -30,19 +36,39 @@ public class ConstraintValue implements RuleConfiguredTargetFactory {
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException {
 
-    ConstraintSettingProvider constraint =
-        ruleContext.getPrerequisite(
-            ConstraintValueRule.CONSTRAINT_SETTING_ATTR,
-            Mode.DONT_CHECK,
-            ConstraintSettingProvider.class);
+    ConstraintSettingInfo constraint =
+        ConstraintSetting.constraintSetting(
+            ruleContext.getPrerequisite(
+                ConstraintValueRule.CONSTRAINT_SETTING_ATTR, Mode.DONT_CHECK));
 
     return new RuleConfiguredTargetBuilder(ruleContext)
         .addProvider(RunfilesProvider.class, RunfilesProvider.EMPTY)
         .addProvider(FileProvider.class, FileProvider.EMPTY)
         .addProvider(FilesToRunProvider.class, FilesToRunProvider.EMPTY)
-        .addProvider(
-            ConstraintValueProvider.class,
-            ConstraintValueProvider.create(constraint, ruleContext.getLabel()))
+        .addNativeDeclaredProvider(ConstraintValueInfo.create(constraint, ruleContext.getLabel()))
         .build();
+  }
+
+  /** Retrieves and casts the provider from the given target. */
+  public static ConstraintValueInfo constraintValue(TransitiveInfoCollection target) {
+    Object provider = target.get(ConstraintValueInfo.SKYLARK_IDENTIFIER);
+    if (provider == null) {
+      return null;
+    }
+    Preconditions.checkState(provider instanceof ConstraintValueInfo);
+    return (ConstraintValueInfo) provider;
+  }
+
+  /** Retrieves and casts the providers from the given targets. */
+  public static Iterable<ConstraintValueInfo> constraintValues(
+      Iterable<? extends TransitiveInfoCollection> targets) {
+    return Iterables.transform(
+        targets,
+        new Function<TransitiveInfoCollection, ConstraintValueInfo>() {
+          @Override
+          public ConstraintValueInfo apply(TransitiveInfoCollection target) {
+            return constraintValue(target);
+          }
+        });
   }
 }

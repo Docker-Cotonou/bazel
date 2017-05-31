@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
+import com.google.common.base.Optional;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -254,6 +255,7 @@ public final class CcLibraryHelper {
   private final List<Artifact> nonModuleMapHeaders = new ArrayList<>();
   private final List<Artifact> publicTextualHeaders = new ArrayList<>();
   private final List<Artifact> privateHeaders = new ArrayList<>();
+  private final List<Artifact> additionalInputs = new ArrayList<>();
   private final List<PathFragment> additionalExportedHeaders = new ArrayList<>();
   private final List<CppModuleMap> additionalCppModuleMaps = new ArrayList<>();
   private final Set<CppSource> compilationUnitSources = new LinkedHashSet<>();
@@ -299,6 +301,7 @@ public final class CcLibraryHelper {
   private CcToolchainProvider ccToolchain;
   private final FdoSupportProvider fdoSupport;
   private String linkedArtifactNameSuffix = "";
+  private boolean useDeps = true;
 
   /**
    * Creates a CcLibraryHelper.
@@ -477,6 +480,12 @@ public final class CcLibraryHelper {
    */
   public CcLibraryHelper addSources(Artifact... sources) {
     return addSources(Arrays.asList(sources));
+  }
+
+  /** Add the corresponding files as non-header, non-source input files. */
+  public CcLibraryHelper addAdditionalInputs(Collection<Artifact> inputs) {
+    Iterables.addAll(additionalInputs, inputs);
+    return this;
   }
 
   /**
@@ -905,6 +914,15 @@ public final class CcLibraryHelper {
   }
 
   /**
+   * Causes actions generated from this CcLibraryHelper not to use build semantics (includes,
+   * headers, srcs) from dependencies.
+   */
+  public CcLibraryHelper doNotUseDeps() {
+    this.useDeps = false;
+    return this;
+  }
+
+  /**
    * Create the C++ compile and link actions, and the corresponding C++-related providers.
    *
    * @throws RuleErrorException
@@ -1190,13 +1208,13 @@ public final class CcLibraryHelper {
 
     PathFragment prefix =
         ruleContext.attributes().isAttributeValueExplicitlySpecified("include_prefix")
-            ? new PathFragment(ruleContext.attributes().get("include_prefix", Type.STRING))
+            ? PathFragment.create(ruleContext.attributes().get("include_prefix", Type.STRING))
             : null;
 
     PathFragment stripPrefix;
     if (ruleContext.attributes().isAttributeValueExplicitlySpecified("strip_include_prefix")) {
-      stripPrefix = new PathFragment(
-          ruleContext.attributes().get("strip_include_prefix", Type.STRING));
+      stripPrefix =
+          PathFragment.create(ruleContext.attributes().get("strip_include_prefix", Type.STRING));
       if (stripPrefix.isAbsolute()) {
         stripPrefix = ruleContext.getLabel().getPackageIdentifier().getRepository().getSourceRoot()
             .getRelative(stripPrefix.toRelative());
@@ -1311,9 +1329,11 @@ public final class CcLibraryHelper {
       contextBuilder.addIncludeDir(publicHeaders.getVirtualIncludePath());
     }
 
-    contextBuilder.mergeDependentContexts(
-        AnalysisUtils.getProviders(deps, CppCompilationContext.class));
-    contextBuilder.mergeDependentContexts(depContexts);
+    if (useDeps) {
+      contextBuilder.mergeDependentContexts(
+          AnalysisUtils.getProviders(deps, CppCompilationContext.class));
+      contextBuilder.mergeDependentContexts(depContexts);
+    }
     CppHelper.mergeToolchainDependentContext(ruleContext, ccToolchain, contextBuilder);
 
     // But defines come after those inherited from deps.
@@ -1323,6 +1343,8 @@ public final class CcLibraryHelper {
     contextBuilder.addDeclaredIncludeSrcs(publicHeaders.getHeaders());
     contextBuilder.addDeclaredIncludeSrcs(publicTextualHeaders);
     contextBuilder.addDeclaredIncludeSrcs(privateHeaders);
+    contextBuilder.addDeclaredIncludeSrcs(additionalInputs);
+    contextBuilder.addNonCodeInputs(additionalInputs);
     contextBuilder.addModularHdrs(publicHeaders.getHeaders());
     contextBuilder.addModularHdrs(privateHeaders);
     contextBuilder.addTextualHdrs(publicTextualHeaders);
@@ -1363,6 +1385,11 @@ public final class CcLibraryHelper {
           featureConfiguration.isEnabled(CppRuleClasses.HEADER_MODULES)
               || featureConfiguration.isEnabled(CppRuleClasses.COMPILE_ALL_MODULES);
       Iterable<CppModuleMap> dependentModuleMaps = collectModuleMaps();
+      Optional<Artifact> umbrellaHeader = cppModuleMap.getUmbrellaHeader();
+      if (umbrellaHeader.isPresent()) {
+        ruleContext.registerAction(
+            createUmbrellaHeaderAction(umbrellaHeader.get(), publicHeaders));
+      }
       ruleContext.registerAction(
           createModuleMapAction(cppModuleMap, publicHeaders, dependentModuleMaps, compiled));
       if (model.getGeneratesPicHeaderModule()) {
@@ -1389,6 +1416,17 @@ public final class CcLibraryHelper {
 
     semantics.setupCompilationContext(ruleContext, contextBuilder);
     return contextBuilder.build();
+  }
+
+  private UmbrellaHeaderAction createUmbrellaHeaderAction(Artifact umbrellaHeader,
+      PublicHeaders publicHeaders) {
+    return new UmbrellaHeaderAction(
+        ruleContext.getActionOwner(),
+        umbrellaHeader,
+        featureConfiguration.isEnabled(CppRuleClasses.ONLY_DOTH_HEADERS_IN_MODULE_MAPS)
+            ? Iterables.filter(publicHeaders.getModuleMapHeaders(), CppFileTypes.MODULE_MAP_HEADER)
+            : publicHeaders.getModuleMapHeaders(),
+        additionalExportedHeaders);
   }
 
   private CppModuleMapAction createModuleMapAction(
@@ -1446,7 +1484,8 @@ public final class CcLibraryHelper {
       RuleContext ruleContext, CcCompilationOutputs ccCompilationOutputs) {
     NestedSetBuilder<Artifact> headerTokens = NestedSetBuilder.stableOrder();
     for (OutputGroupProvider dep :
-        ruleContext.getPrerequisites("deps", Mode.TARGET, OutputGroupProvider.class)) {
+        ruleContext.getPrerequisites("deps", Mode.TARGET,
+            OutputGroupProvider.SKYLARK_CONSTRUCTOR.getKey(), OutputGroupProvider.class)) {
       headerTokens.addTransitive(dep.getOutputGroup(CcLibraryHelper.HIDDEN_HEADER_TOKENS));
     }
     if (ruleContext.getFragment(CppConfiguration.class).processHeadersInDependencies()) {

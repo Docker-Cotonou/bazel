@@ -16,12 +16,16 @@ package com.google.devtools.build.lib.remote;
 
 import com.google.common.hash.HashCode;
 import com.google.common.hash.Hashing;
+import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ActionInputFileCache;
+import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Action;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Message;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
 /** Helper methods relating to computing ContentDigest messages for remote execution. */
@@ -33,9 +37,14 @@ public final class ContentDigests {
     return buildDigest(Hashing.sha1().hashBytes(blob).asBytes(), blob.length);
   }
 
-  // TODO(olaola): cache these in ActionInputFileCache!
   public static ContentDigest computeDigest(Path file) throws IOException {
     return buildDigest(file.getSHA1Digest(), file.getFileSize());
+  }
+
+  public static ContentDigest computeDigest(VirtualActionInput input) throws IOException {
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    input.writeTo(buffer);
+    return computeDigest(buffer.toByteArray());
   }
 
   /**
@@ -79,6 +88,11 @@ public final class ContentDigests {
     ContentDigest.Builder b = ContentDigest.newBuilder();
     b.setDigest(ByteString.copyFrom(digest)).setSizeBytes(size);
     return b.build();
+  }
+
+  public static ContentDigest getDigestFromInputCache(ActionInput input, ActionInputFileCache cache)
+      throws IOException {
+    return buildDigest(cache.getDigest(input), cache.getSizeInBytes(input));
   }
 
   public static String toHexString(ContentDigest digest) {

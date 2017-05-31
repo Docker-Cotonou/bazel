@@ -14,7 +14,6 @@
 package com.google.devtools.build.android;
 
 import com.android.ide.common.res2.MergingException;
-import com.android.utils.StdLogger;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Strings;
 import com.google.devtools.build.android.AndroidResourceProcessor.AaptConfigOptions;
@@ -42,8 +41,6 @@ public class LibraryRClassGeneratorAction {
 
   private static final Logger logger =
       Logger.getLogger(LibraryRClassGeneratorAction.class.getName());
-
-  private static final StdLogger stdLogger = new StdLogger(StdLogger.Level.WARNING);
 
   /** Flag specifications for this action. */
   public static final class Options extends OptionsBase {
@@ -93,11 +90,10 @@ public class LibraryRClassGeneratorAction {
               Strings.nullToEmpty(options.packageForR));
       resourceClassWriter.setIncludeClassFile(true);
       resourceClassWriter.setIncludeJavaFile(false);
-      final AndroidResourceProcessor resourceProcessor = new AndroidResourceProcessor(stdLogger);
       logger.fine(String.format("Setup finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
 
       final ParsedAndroidData data =
-          resourceProcessor.deserializeSymbolsToData(options.symbols);
+          AndroidDataDeserializer.deserializeSymbolsToData(options.symbols);
       logger.fine(
           String.format("Deserialization finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
 

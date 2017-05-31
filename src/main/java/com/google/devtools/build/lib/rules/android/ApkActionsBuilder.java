@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -298,8 +299,6 @@ public class ApkActionsBuilder {
       }
     }
 
-    ruleContext.registerAction(compressedApkActionBuilder.build(ruleContext));
-
     SpawnAction.Builder singleJarActionBuilder = new SpawnAction.Builder()
         .setMnemonic("ApkBuilder")
         .setProgressMessage(message)
@@ -325,9 +324,15 @@ public class ApkActionsBuilder {
           .addOutputArgument(extractedJavaResourceZip)
           .build(ruleContext));
 
-      singleJarActionBuilder
-          .addArgument("--sources")
-          .addInputArgument(extractedJavaResourceZip);
+      if (ruleContext.getFragment(AndroidConfiguration.class).compressJavaResources()) {
+        compressedApkActionBuilder
+            .addArgument("--sources")
+            .addInputArgument(extractedJavaResourceZip);
+      } else {
+        singleJarActionBuilder
+            .addArgument("--sources")
+            .addInputArgument(extractedJavaResourceZip);
+      }
     }
 
     if (nativeLibs.getName() != null) {
@@ -354,6 +359,19 @@ public class ApkActionsBuilder {
       }
     }
 
+    ImmutableList<String> noCompressExtensions =
+        ruleContext.getTokenizedStringListAttr("nocompress_extensions");
+    if (ruleContext.getFragment(AndroidConfiguration.class).useNocompressExtensionsOnApk()
+        && !noCompressExtensions.isEmpty()) {
+      compressedApkActionBuilder
+          .addArgument("--nocompress_suffixes")
+          .addArguments(noCompressExtensions);
+      singleJarActionBuilder
+          .addArgument("--nocompress_suffixes")
+          .addArguments(noCompressExtensions);
+    }
+
+    ruleContext.registerAction(compressedApkActionBuilder.build(ruleContext));
     ruleContext.registerAction(singleJarActionBuilder.build(ruleContext));
   }
 

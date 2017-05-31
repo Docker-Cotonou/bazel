@@ -17,8 +17,8 @@ package com.google.devtools.build.remote;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.remote.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.CasServiceGrpc.CasServiceImplBase;
-import com.google.devtools.build.lib.remote.ConcurrentMapActionCache;
-import com.google.devtools.build.lib.remote.ConcurrentMapFactory;
+import com.google.devtools.build.lib.remote.ChannelOptions;
+import com.google.devtools.build.lib.remote.Chunker;
 import com.google.devtools.build.lib.remote.ContentDigests;
 import com.google.devtools.build.lib.remote.ContentDigests.ActionKey;
 import com.google.devtools.build.lib.remote.ExecuteServiceGrpc.ExecuteServiceImplBase;
@@ -48,9 +48,14 @@ import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionCacheSetRequ
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionCacheStatus;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionStatus;
 import com.google.devtools.build.lib.remote.RemoteProtocol.FileNode;
+import com.google.devtools.build.lib.remote.RemoteProtocol.Platform;
+import com.google.devtools.build.lib.remote.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.SimpleBlobStoreActionCache;
+import com.google.devtools.build.lib.remote.SimpleBlobStoreFactory;
 import com.google.devtools.build.lib.shell.AbnormalTerminationException;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
+import com.google.devtools.build.lib.shell.TimeoutKillableObserver;
 import com.google.devtools.build.lib.unix.UnixFileSystem;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -60,9 +65,10 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.common.options.OptionsParser;
-import com.google.protobuf.ByteString;
+import com.google.protobuf.Duration;
+import com.google.protobuf.util.Durations;
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
+import io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -70,13 +76,12 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.FileAlreadyExistsException;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -87,28 +92,50 @@ import java.util.logging.Logger;
 public class RemoteWorker {
   private static final Logger LOG = Logger.getLogger(RemoteWorker.class.getName());
   private static final boolean LOG_FINER = LOG.isLoggable(Level.FINER);
-  private final ConcurrentMapActionCache cache;
   private final CasServiceImplBase casServer;
   private final ExecuteServiceImplBase execServer;
   private final ExecutionCacheServiceImplBase execCacheServer;
+  private final SimpleBlobStoreActionCache cache;
+  private final RemoteWorkerOptions workerOptions;
+  private final RemoteOptions remoteOptions;
 
-  public RemoteWorker(Path workPath, RemoteWorkerOptions options, ConcurrentMapActionCache cache) {
+  public RemoteWorker(
+      RemoteWorkerOptions workerOptions,
+      RemoteOptions remoteOptions,
+      SimpleBlobStoreActionCache cache)
+      throws IOException {
     this.cache = cache;
+    this.workerOptions = workerOptions;
+    this.remoteOptions = remoteOptions;
+    if (workerOptions.workPath != null) {
+      Path workPath = getFileSystem().getPath(workerOptions.workPath);
+      FileSystemUtils.createDirectoryAndParents(workPath);
+      execServer = new ExecutionServer(workPath);
+    } else {
+      execServer = null;
+    }
     casServer = new CasServer();
-    execServer = new ExecutionServer(workPath, options);
     execCacheServer = new ExecutionCacheServer();
   }
 
-  public CasServiceImplBase getCasServer() {
-    return casServer;
-  }
-
-  public ExecuteServiceImplBase getExecutionServer() {
-    return execServer;
-  }
-
-  public ExecutionCacheServiceImplBase getExecCacheServer() {
-    return execCacheServer;
+  public Server startServer() throws IOException {
+    NettyServerBuilder b =
+        NettyServerBuilder.forPort(workerOptions.listenPort)
+            .maxMessageSize(ChannelOptions.create(remoteOptions).maxMessageSize())
+            .addService(casServer)
+            .addService(execCacheServer);
+    if (execServer != null) {
+      b.addService(execServer);
+    } else {
+      System.out.println("*** Execution disabled, only serving cache requests.");
+    }
+    Server server = b.build();
+    System.out.println(
+        "*** Starting grpc server on all locally bound IPs on port "
+            + workerOptions.listenPort
+            + ".");
+    server.start();
+    return server;
   }
 
   class CasServer extends CasServiceImplBase {
@@ -178,17 +205,23 @@ public class RemoteWorker {
       }
       status.setSucceeded(true);
       try {
+        // This still relies on the total blob size to be small enough to fit in memory
+        // simultaneously! TODO(olaola): refactor to fix this if the need arises.
+        Chunker.Builder b = new Chunker.Builder().chunkSize(remoteOptions.grpcMaxChunkSizeBytes);
         for (ContentDigest digest : request.getDigestList()) {
-          reply.setData(
-              BlobChunk.newBuilder()
-                  .setDigest(digest)
-                  .setData(ByteString.copyFrom(cache.downloadBlob(digest)))
-                  .build());
+          b.addInput(cache.downloadBlob(digest));
+        }
+        Chunker c = b.build();
+        while (c.hasNext()) {
+          reply.setData(c.next());
           responseObserver.onNext(reply.build());
           if (reply.hasStatus()) {
             reply.clearStatus(); // Only send status on first chunk.
           }
         }
+      } catch (IOException e) {
+        // This cannot happen, as we are chunking in-memory blobs.
+        throw new RuntimeException("Internal error: " + e);
       } catch (CacheNotFoundException e) {
         // This can only happen if an item gets evicted right after we check.
         reply.clearData();
@@ -318,13 +351,20 @@ public class RemoteWorker {
     }
   }
 
+  // How long to wait for the uid command.
+  private static final Duration uidTimeout = Durations.fromMicros(30);
+
   class ExecutionServer extends ExecuteServiceImplBase {
     private final Path workPath;
-    private final RemoteWorkerOptions options;
 
-    public ExecutionServer(Path workPath, RemoteWorkerOptions options) {
+    //The name of the container image entry in the Platform proto
+    // (see src/main/protobuf/remote_protocol.proto and
+    // experimental_remote_platform_override in
+    // src/main/java/com/google/devtools/build/lib/remote/RemoteOptions.java)
+    public static final String CONTAINER_IMAGE_ENTRY_NAME = "container-image";
+
+    public ExecutionServer(Path workPath) {
       this.workPath = workPath;
-      this.options = options;
     }
 
     private Map<String, String> getEnvironmentVariables(RemoteProtocol.Command command) {
@@ -335,8 +375,103 @@ public class RemoteWorker {
       return result;
     }
 
+    // Gets the uid of the current user. If uid could not be successfully fetched (e.g., on other
+    // platforms, if for some reason the timeout was not met, if "id -u" returned non-numeric
+    // number, etc), logs a WARNING and return -1.
+    // This is used to set "-u UID" flag for commands running inside Docker containers. There are
+    // only a small handful of cases where uid is vital (e.g., if strict permissions are set on the
+    // output files), so most use cases would work without setting uid.
+    private long getUid() {
+      Command cmd = new Command(new String[] {"id", "-u"});
+      try {
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        cmd.execute(
+            Command.NO_INPUT,
+            new TimeoutKillableObserver(Durations.toMicros(uidTimeout)),
+            stdout,
+            stderr);
+        return Long.parseLong(stdout.toString().trim());
+      } catch (CommandException | NumberFormatException e) {
+        LOG.warning("Could not get UID for passing to Docker container. Proceeding without it.");
+        LOG.warning("Error: " + e.toString());
+        return -1;
+      }
+    }
+
+    // Checks Action for docker container definition. If no docker container specified, returns
+    // null. Otherwise returns docker container name from the parameters.
+    private String dockerContainer(Action action) throws IllegalArgumentException {
+      String result = null;
+      List<Platform.Property> entries = action.getPlatform().getEntryList();
+
+      for (Platform.Property entry : entries) {
+        if (entry.getName().equals(CONTAINER_IMAGE_ENTRY_NAME)) {
+          if (result == null) {
+            result = entry.getValue();
+          } else {
+            // Multiple container name entries
+            throw new IllegalArgumentException(
+                "Multiple entries for " + CONTAINER_IMAGE_ENTRY_NAME + " in action.Platform");
+          }
+        }
+      }
+      return result;
+    }
+
+    // Takes an Action and parameters that can be used to create a Command. Returns the Command.
+    // If no docker container is specified inside Action, creates a Command straight from the
+    // arguments. Otherwise, returns a Command that would run the specified command inside the
+    // specified docker container.
+    private Command getCommand(
+        Action action,
+        String[] commandLineElements,
+        Map<String, String> environmentVariables,
+        String pathString)
+        throws IllegalArgumentException {
+      String container = dockerContainer(action);
+      if (container == null) {
+        // Was not asked to Dokerize.
+        return new Command(commandLineElements, environmentVariables, new File(pathString));
+      }
+
+      // Run command inside a docker container.
+      ArrayList<String> newCommandLineElements = new ArrayList<String>();
+      newCommandLineElements.add("docker");
+      newCommandLineElements.add("run");
+
+      long uid = getUid();
+      if (uid >= 0) {
+        newCommandLineElements.add("-u");
+        newCommandLineElements.add(Long.toString(uid));
+      }
+
+      final String dockerPathString = pathString + "-docker";
+      newCommandLineElements.add("-v");
+      newCommandLineElements.add(pathString + ":" + dockerPathString);
+      newCommandLineElements.add("-w");
+      newCommandLineElements.add(dockerPathString);
+
+      for (Map.Entry<String, String> entry : environmentVariables.entrySet()) {
+        String key = entry.getKey();
+        String value = entry.getValue();
+
+        newCommandLineElements.add("-e");
+        newCommandLineElements.add(key + "=" + value);
+      }
+
+      newCommandLineElements.add(container);
+
+      newCommandLineElements.addAll(Arrays.asList(commandLineElements));
+
+      return new Command(
+          newCommandLineElements.toArray(new String[newCommandLineElements.size()]),
+          null,
+          new File(pathString));
+    }
+
     public ExecuteReply execute(Action action, Path execRoot)
-        throws IOException, InterruptedException {
+        throws IOException, InterruptedException, IllegalArgumentException {
       ByteArrayOutputStream stdout = new ByteArrayOutputStream();
       ByteArrayOutputStream stderr = new ByteArrayOutputStream();
       try {
@@ -356,10 +491,11 @@ public class RemoteWorker {
 
         // TODO(olaola): time out after specified server-side deadline.
         Command cmd =
-            new Command(
+            getCommand(
+                action,
                 command.getArgvList().toArray(new String[] {}),
                 getEnvironmentVariables(command),
-                new File(execRoot.getPathString()));
+                execRoot.getPathString());
         cmd.execute(Command.NO_INPUT, Command.NO_OBSERVER, stdout, stderr, true);
 
         // Execute throws a CommandException on non-zero return values, so action has succeeded.
@@ -436,14 +572,14 @@ public class RemoteWorker {
         }
         ExecuteReply reply = execute(request.getAction(), tempRoot);
         responseObserver.onNext(reply);
-        if (options.debug) {
+        if (workerOptions.debug) {
           if (!reply.getStatus().getSucceeded()) {
             LOG.warning("Work failed. Request: " + request.toString() + ".");
           } else if (LOG_FINER) {
             LOG.fine("Work completed.");
           }
         }
-        if (!options.debug) {
+        if (!workerOptions.debug) {
           FileSystemUtils.deleteTree(tempRoot);
         } else {
           LOG.warning("Preserving work directory " + tempRoot.toString() + ".");
@@ -468,32 +604,21 @@ public class RemoteWorker {
     RemoteOptions remoteOptions = parser.getOptions(RemoteOptions.class);
     RemoteWorkerOptions remoteWorkerOptions = parser.getOptions(RemoteWorkerOptions.class);
 
-    if (remoteWorkerOptions.workPath == null) {
-      printUsage(parser);
-      return;
-    }
-
     System.out.println("*** Initializing in-memory cache server.");
-    ConcurrentMap<String, byte[]> cache =
-        ConcurrentMapFactory.isRemoteCacheOptions(remoteOptions)
-            ? ConcurrentMapFactory.create(remoteOptions)
-            : new ConcurrentHashMap<String, byte[]>();
+    boolean remoteCache = SimpleBlobStoreFactory.isRemoteCacheOptions(remoteOptions);
+    if (!remoteCache) {
+      System.out.println("*** Not using remote cache. This should be used for testing only!");
+    }
+    SimpleBlobStore blobStore =
+        remoteCache
+            ? SimpleBlobStoreFactory.create(remoteOptions)
+            : new SimpleBlobStoreFactory.ConcurrentMapBlobStore(
+                new ConcurrentHashMap<String, byte[]>());
 
-    System.out.println(
-        "*** Starting grpc server on all locally bound IPs on port "
-            + remoteWorkerOptions.listenPort
-            + ".");
-    Path workPath = getFileSystem().getPath(remoteWorkerOptions.workPath);
-    FileSystemUtils.createDirectoryAndParents(workPath);
     RemoteWorker worker =
-        new RemoteWorker(workPath, remoteWorkerOptions, new ConcurrentMapActionCache(cache));
-    final Server server =
-        ServerBuilder.forPort(remoteWorkerOptions.listenPort)
-            .addService(worker.getCasServer())
-            .addService(worker.getExecutionServer())
-            .addService(worker.getExecCacheServer())
-            .build();
-    server.start();
+        new RemoteWorker(
+            remoteWorkerOptions, remoteOptions, new SimpleBlobStoreActionCache(blobStore));
+    final Server server = worker.startServer();
 
     final Path pidFile;
     if (remoteWorkerOptions.pidFile != null) {
@@ -524,13 +649,6 @@ public class RemoteWorker {
               }
             });
     server.awaitTermination();
-  }
-
-  public static void printUsage(OptionsParser parser) {
-    System.out.println("Usage: remote_worker \n\n" + "Starts a worker that runs a gRPC service.");
-    System.out.println(
-        parser.describeOptions(
-            Collections.<String, String>emptyMap(), OptionsParser.HelpVerbosity.LONG));
   }
 
   static FileSystem getFileSystem() {

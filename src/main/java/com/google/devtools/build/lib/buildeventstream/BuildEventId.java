@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.buildeventstream;
 
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.TextFormat;
 import java.io.Serializable;
 import java.util.List;
@@ -84,6 +85,28 @@ public final class BuildEventId implements Serializable {
         BuildEventStreamProtos.BuildEventId.newBuilder().setStarted(startedId).build());
   }
 
+  public static BuildEventId commandlineId() {
+    BuildEventStreamProtos.BuildEventId.CommandLineId commandLineId =
+        BuildEventStreamProtos.BuildEventId.CommandLineId.getDefaultInstance();
+    return new BuildEventId(
+        BuildEventStreamProtos.BuildEventId.newBuilder().setCommandLine(commandLineId).build());
+  }
+
+  public static BuildEventId optionsParsedId() {
+    BuildEventStreamProtos.BuildEventId.OptionsParsedId optionsParsedId =
+        BuildEventStreamProtos.BuildEventId.OptionsParsedId.getDefaultInstance();
+    return new BuildEventId(
+        BuildEventStreamProtos.BuildEventId.newBuilder().setOptionsParsed(optionsParsedId).build());
+  }
+
+  public static BuildEventId workspaceStatusId() {
+    return new BuildEventId(
+        BuildEventStreamProtos.BuildEventId.newBuilder()
+            .setWorkspaceStatus(
+                BuildEventStreamProtos.BuildEventId.WorkspaceStatusId.getDefaultInstance())
+            .build());
+  }
+
   private static BuildEventId targetPatternExpanded(List<String> targetPattern, boolean skipped) {
     BuildEventStreamProtos.BuildEventId.PatternExpandedId patternId =
         BuildEventStreamProtos.BuildEventId.PatternExpandedId.newBuilder()
@@ -131,12 +154,29 @@ public final class BuildEventId implements Serializable {
     return new BuildEventId(cause.getIdProto());
   }
 
+  public static BuildEventId actionCompleted(Path path) {
+    return new BuildEventId(
+        BuildEventStreamProtos.BuildEventId.newBuilder()
+            .setActionCompleted(
+                BuildEventStreamProtos.BuildEventId.ActionCompletedId.newBuilder()
+                    .setPrimaryOutput(path.toString())
+                    .build())
+            .build());
+  }
+
+  public static BuildEventId fromArtifactGroupName(String name) {
+    BuildEventStreamProtos.BuildEventId.NamedSetOfFilesId namedSetId =
+        BuildEventStreamProtos.BuildEventId.NamedSetOfFilesId.newBuilder().setId(name).build();
+    return new BuildEventId(
+        BuildEventStreamProtos.BuildEventId.newBuilder().setNamedSet(namedSetId).build());
+  }
+
   public static BuildEventId testResult(Label target, Integer run, Integer shard, Integer attempt) {
     BuildEventStreamProtos.BuildEventId.TestResultId resultId =
         BuildEventStreamProtos.BuildEventId.TestResultId.newBuilder()
             .setLabel(target.toString())
-            .setRun(run)
-            .setShard(shard)
+            .setRun(run + 1)
+            .setShard(shard + 1)
             .setAttempt(attempt)
             .build();
     return new BuildEventId(

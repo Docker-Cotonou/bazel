@@ -56,8 +56,6 @@ gflags.DEFINE_string("user_home_dir", None, "Path to the user's home directory")
 gflags.DEFINE_string("flagfile", None,
                      "Path to a file to read additional flags from")
 gflags.DEFINE_string("verbosity", None, "Logging verbosity")
-gflags.DEFINE_string("activity_name_file", None, "Path to the file that "
-                     "contains the name of the main activity to start")
 
 FLAGS = gflags.FLAGS
 
@@ -278,8 +276,12 @@ class Adb(object):
     self._Shell("input keyevent KEYCODE_APP_SWITCH")
     self._Shell("am kill %s" % package)
 
-  def StartApp(self, package):
+  def StartApp(self, package, start_type):
     """Starts the app with the given package."""
+    if start_type == "debug":
+      self._Shell("am set-debug-app -w --persistent %s" % package)
+    else:
+      self._Shell("am clear-debug-app %s" % package)
     self._Shell("monkey -p %s -c android.intent.category.LAUNCHER 1" % package)
 
   def _Shell(self, cmd):
@@ -725,9 +727,9 @@ def IncrementalInstall(adb_path, execroot, stub_datafile, output_marker,
         else:
           adb.StopApp(app_package)
 
-    if start_type in ["cold", "warm"]:
+    if start_type in ["cold", "warm", "debug"]:
       logging.info("Starting application %s", app_package)
-      adb.StartApp(app_package)
+      adb.StartApp(app_package, start_type)
 
     with file(output_marker, "w") as _:
       pass

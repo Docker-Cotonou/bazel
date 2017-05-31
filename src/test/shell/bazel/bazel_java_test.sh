@@ -105,8 +105,6 @@ function test_build_hello_world() {
   bazel build //java/main:main &> $TEST_log || fail "build failed"
 }
 
-# Regression test for #2606: support for passing -sourcepath
-# TODO(#2606): Update when a final solution is found for #2606.
 function test_build_with_sourcepath() {
   mkdir -p g
   cat >g/A.java <<'EOF'
@@ -133,7 +131,6 @@ genrule(
   outs = ["B.jar"],
   cmd = "zip $@ $(SRCS)",
 )
-
 java_library(
   name = "test",
   srcs = ["A.java"],
@@ -143,6 +140,160 @@ java_library(
 EOF
   bazel build //g:test >$TEST_log || fail "Failed to build //g:test"
 }
+
+ function test_java_common_compile_sourcepath() {
+   # TODO(bazel-team): Enable this for Java 7 when VanillaJavaBuilder supports --sourcepath.
+   JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:toolchain' | grep source_version | cut -d '"' -f 2)"
+   if [ "${JAVA_VERSION}" = "1.7" ]; then
+     return 0
+   fi
+   mkdir -p g
+   cat >g/A.java <<'EOF'
+package g;
+public class A {
+   public A() {
+      new B();
+   }
+}
+EOF
+
+  cat >g/B.java <<'EOF'
+package g;
+public class B {
+   public B() {
+   }
+}
+EOF
+
+   cat >g/BUILD <<'EOF'
+load(':java_custom_library.bzl', 'java_custom_library')
+genrule(
+  name = "stub",
+  srcs = ["B.java"],
+  outs = ["B.jar"],
+  cmd = "zip $@ $(SRCS)",
+)
+
+java_custom_library(
+  name = "test",
+  srcs = ["A.java"],
+  sourcepath = [":stub"]
+)
+EOF
+
+  cat >g/java_custom_library.bzl <<'EOF'
+def _impl(ctx):
+  output_jar = ctx.new_file("lib" + ctx.label.name + ".jar")
+
+  compilation_provider = java_common.compile(
+    ctx,
+    source_files = ctx.files.srcs,
+    output = output_jar,
+    javac_opts = java_common.default_javac_opts(ctx, java_toolchain_attr = "_java_toolchain"),
+    deps = [],
+    sourcepath = ctx.files.sourcepath,
+    strict_deps = "ERROR",
+    java_toolchain = ctx.attr._java_toolchain,
+    host_javabase = ctx.attr._host_javabase
+  )
+  return struct(
+    files = set([output_jar]),
+    providers = [compilation_provider]
+  )
+
+java_custom_library = rule(
+  implementation = _impl,
+  attrs = {
+    "srcs": attr.label_list(allow_files=True),
+    "sourcepath": attr.label_list(),
+    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_host_javabase": attr.label(default = Label("//tools/defaults:jdk"))
+  },
+  fragments = ["java"]
+)
+EOF
+   bazel build //g:test &> $TEST_log || fail "Failed to build //g:test"
+   jar tf bazel-bin/g/libtest.jar >> $TEST_log || fail "Failed to jar tf bazel-bin/g/libtest.jar"
+   expect_log "g/A.class"
+   expect_not_log "g/B.class"
+ }
+
+function test_java_common_compile_sourcepath_with_implicit_class() {
+   # TODO(bazel-team): Enable this for Java 7 when VanillaJavaBuilder supports --sourcepath.
+   JAVA_VERSION="1.$(bazel query  --output=build '@bazel_tools//tools/jdk:toolchain' | grep source_version | cut -d '"' -f 2)"
+   if [ "${JAVA_VERSION}" = "1.7" ]; then
+     return 0
+   fi
+   mkdir -p g
+   cat >g/A.java <<'EOF'
+package g;
+public class A {
+   public A() {
+      new B();
+   }
+}
+EOF
+
+  cat >g/B.java <<'EOF'
+package g;
+public class B {
+   public B() {
+   }
+}
+EOF
+
+   cat >g/BUILD <<'EOF'
+load(':java_custom_library.bzl', 'java_custom_library')
+genrule(
+  name = "stub",
+  srcs = ["B.java"],
+  outs = ["B.jar"],
+  cmd = "zip $@ $(SRCS)",
+)
+
+java_custom_library(
+  name = "test",
+  srcs = ["A.java"],
+  sourcepath = [":stub"]
+)
+EOF
+
+  cat >g/java_custom_library.bzl <<'EOF'
+def _impl(ctx):
+  output_jar = ctx.new_file("lib" + ctx.label.name + ".jar")
+
+  compilation_provider = java_common.compile(
+    ctx,
+    source_files = ctx.files.srcs,
+    output = output_jar,
+    javac_opts = java_common.default_javac_opts(ctx, java_toolchain_attr = "_java_toolchain") + ["-implicit:class"],
+    deps = [],
+    sourcepath = ctx.files.sourcepath,
+    strict_deps = "ERROR",
+    java_toolchain = ctx.attr._java_toolchain,
+    host_javabase = ctx.attr._host_javabase
+  )
+  return struct(
+    files = set([output_jar]),
+    providers = [compilation_provider]
+  )
+
+java_custom_library = rule(
+  implementation = _impl,
+  attrs = {
+    "srcs": attr.label_list(allow_files=True),
+    "sourcepath": attr.label_list(),
+    "_java_toolchain": attr.label(default = Label("@bazel_tools//tools/jdk:toolchain")),
+    "_host_javabase": attr.label(default = Label("//tools/defaults:jdk"))
+  },
+  fragments = ["java"]
+)
+EOF
+   bazel build //g:test &> $TEST_log || fail "Failed to build //g:test"
+   jar tf bazel-bin/g/libtest.jar >> $TEST_log || fail "Failed to jar tf bazel-bin/g/libtest.jar"
+   expect_log "g/A.class"
+   expect_log "g/B.class"
+ }
 
 # Runfiles is disabled by default on Windows, but we can test it on Unix by
 # adding flag --experimental_enable_runfiles=0
@@ -207,6 +358,7 @@ EOF
 }
 
 function test_java_test_main_class() {
+  setup_javatest_support
   mkdir -p java/testrunners || fail "mkdir failed"
   cat > java/testrunners/TestRunner.java <<EOF
 package testrunners;
@@ -246,6 +398,7 @@ java_library(name = "test_runner",
 
 java_test(name = "Tests",
           srcs = ['Tests.java'],
+          deps = ['//third_party:junit4'],
           main_class = "testrunners.TestRunner",
           runtime_deps = [':test_runner']
 )
@@ -333,7 +486,7 @@ EOF
 
   write_java_custom_rule
 
-  $PRODUCT_NAME run :Main > $TEST_log || fail "Java sandwich build failed"
+  bazel run :Main > $TEST_log || fail "Java sandwich build failed"
   expect_log "Message from A"
   expect_log "Message from B"
   expect_log "Message from C"
@@ -459,6 +612,7 @@ EOF
 }
 
 function test_java_test_java_sandwich() {
+  setup_javatest_support
   mkdir -p java/com/google/sandwich
   cd java/com/google/sandwich
 
@@ -471,7 +625,10 @@ java_test(
   name = "MainTest",
   size = "small",
   srcs = ["MainTest.java"],
-  deps = [":custom"]
+  deps = [
+      ":custom",
+      "//third_party:junit4",
+  ],
 )
 
 java_custom_library(
@@ -533,6 +690,49 @@ EOF
   expect_log "Message from A"
   expect_log "Message from B"
   expect_log "Test message"
+}
+
+function test_explicit_java_test_deps_flag() {
+  setup_javatest_support
+  mkdir -p java/testrunners || fail "mkdir failed"
+
+  cat > java/testrunners/Tests.java <<EOF
+package testrunners;
+
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+import org.junit.Test;
+
+@RunWith(JUnit4.class)
+public class Tests {
+
+  @Test
+  public void testTest() {
+    System.out.println("testTest was run");
+  }
+}
+EOF
+
+  # With explicit_java_test_deps, we fail without explicitly specifying the JUnit deps.
+  cat > java/testrunners/BUILD <<EOF
+java_test(name = "Tests",
+          srcs = ['Tests.java'],
+)
+EOF
+  bazel test --test_output=streamed --explicit_java_test_deps //java/testrunners:Tests \
+      &> "$TEST_log" && fail "Expected Failure" || true
+  expect_log "cannot find symbol"
+
+  # We start passing again with explicit_java_test_deps once we explicitly specify the deps.
+  cat > java/testrunners/BUILD <<EOF
+java_test(name = "Tests",
+          srcs = ['Tests.java'],
+          deps = ['//third_party:junit4'],
+)
+EOF
+  bazel test --test_output=streamed --explicit_java_test_deps //java/testrunners:Tests \
+      &> "$TEST_log" || fail "Expected success"
+  expect_log "testTest was run"
 }
 
 run_suite "Java integration tests"

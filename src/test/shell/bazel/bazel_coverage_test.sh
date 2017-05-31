@@ -78,8 +78,9 @@ public class TestCollatz {
 EOF
 
   bazel coverage //:test &>$TEST_log || fail "Coverage for //:test failed"
-
+  cat $TEST_log
   ending_part=$(sed -n -e '/PASSED/,$p' $TEST_log)
+
   coverage_file_path=$(grep -Eo "/[/a-zA-Z0-9\.\_\-]+\.dat$" <<< "$ending_part")
   [ -e $coverage_file_path ] || fail "Coverage output file not exists!"
 
@@ -107,5 +108,4 @@ EOF
   fi
 }
 
-# TODO(#2227): Re-enable when the jacoco processor issue is fixed.
-#run_suite "test tests"
+run_suite "test tests"

@@ -101,15 +101,20 @@ public class DataResourceXml implements DataResource {
               attribute.getName().getNamespaceURI().isEmpty()
                   ? attribute.getName().getLocalPart()
                   : attribute.getName().getPrefix() + ":" + attribute.getName().getLocalPart();
-          overwritingConsumer.consume(
-            fqnFactory.create(
+          FullyQualifiedName fqn = fqnFactory.create(
                 VirtualType.RESOURCES_ATTRIBUTE,
-                attributeName),
-            DataResourceXml.createWithNamespaces(
+                attribute.getName().toString());
+          ResourcesAttribute resourceAttribute =
+              ResourcesAttribute.of(fqn, attributeName, attribute.getValue());
+          DataResourceXml resource = DataResourceXml.createWithNamespaces(
                 path,
-                ResourcesAttribute.of(attributeName, attribute.getValue()),
-                namespaces)
-            );
+                resourceAttribute,
+                namespaces);
+          if (resourceAttribute.isCombining()) {
+            combiningConsumer.consume(fqn, resource);
+          } else {
+            overwritingConsumer.consume(fqn, resource);
+          }
         }
         // Process resource declarations.
         for (StartElement start = XmlResourceValues.findNextStart(eventReader);
@@ -271,6 +276,11 @@ public class DataResourceXml implements DataResource {
       Path sourcePath, XmlResourceValue xml, ImmutableMap<String, String> prefixToUri) {
     return createWithNamespaces(sourcePath, xml, Namespaces.from(prefixToUri));
   }
+  
+  public static DataResourceXml createWithNoNamespace(DataSource source, XmlResourceValue xml) {
+    return new DataResourceXml(source, xml, Namespaces.empty());
+  }
+
 
   public static DataResourceXml createWithNamespaces(
       DataSource source, XmlResourceValue xml, Namespaces namespaces) {
@@ -350,5 +360,15 @@ public class DataResourceXml implements DataResource {
       return this;
     }
     return createWithNamespaces(source.overwrite(resource.source()), xml, namespaces);
+  }
+  
+  @Override
+  public DataValue update(DataSource source) {
+    return createWithNamespaces(source, xml, namespaces);
+  }
+
+  @Override
+  public String asConflictString() {
+    return source.asConflictString();
   }
 }

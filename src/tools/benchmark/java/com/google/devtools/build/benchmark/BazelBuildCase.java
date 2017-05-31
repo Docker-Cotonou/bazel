@@ -16,6 +16,9 @@ package com.google.devtools.build.benchmark;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.benchmark.codegenerator.CodeGenerator;
+import com.google.devtools.build.benchmark.codegenerator.CppCodeGenerator;
 import com.google.devtools.build.benchmark.codegenerator.JavaCodeGenerator;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -28,18 +31,21 @@ import java.nio.file.Path;
 final class BazelBuildCase implements BuildCase {
 
   private static final ImmutableMap<String, String> BUILD_TARGET_NAME_TO_DESCRIPTION =
-      ImmutableMap.of(
-          "AFewFiles", "Target: A Few Files",
-          "ManyFiles", "Target: Many Files",
-          "LongChainedDeps", "Target: Long Chained Deps",
-          "ParallelDeps", "Target: Parallel Deps");
+      ImmutableMap.<String, String>builder()
+          .put("java/AFewFiles", "Java Target: A Few Files")
+          .put("java/ManyFiles", "Java Target: Many Files")
+          .put("java/LongChainedDeps", "Java Target: Long Chained Deps")
+          .put("java/ParallelDeps", "Java Target: Parallel Deps")
+          .put("cpp/AFewFiles", "Cpp Target: A Few Files")
+          .put("cpp/ManyFiles", "Cpp Target: Many Files")
+          .put("cpp/LongChainedDeps", "Cpp Target: Long Chained Deps")
+          .put("cpp/ParallelDeps", "Cpp Target: Parallel Deps")
+          .build();
+  private static final ImmutableSet<String> ALL_TARGET_NAMES = ImmutableSet.<String>of(
+      "AFewFiles", "ManyFiles", "LongChainedDeps", "ParallelDeps");
   private static final String WORKSPACE_FILE_NAME = "WORKSPACE";
   private static final ImmutableList<BuildTargetConfig> defaultBuildTargetConfigs =
       getDefaultBuildTargetConfigs();
-  private static final boolean INCLUDE_TARGET_A_FEW_FILES = true;
-  private static final boolean INCLUDE_TARGET_MANY_FILES = true;
-  private static final boolean INCLUDE_TARGET_LONG_CHAINED_DEPS = true;
-  private static final boolean INCLUDE_TARGET_PARALLEL_DEPS = true;
 
   private static final BuildEnvConfig FULL_CLEAN_BUILD_CONFIG =
       BuildEnvConfig.newBuilder()
@@ -85,12 +91,11 @@ final class BazelBuildCase implements BuildCase {
   public void prepareGeneratedCode(Path copyDir, Path generatedCodePath) throws IOException {
     // Prepare generated code for copy
     if (!copyDir.toFile().exists()) {
-      JavaCodeGenerator.generateNewProject(
-          copyDir.toString(),
-          INCLUDE_TARGET_A_FEW_FILES,
-          INCLUDE_TARGET_MANY_FILES,
-          INCLUDE_TARGET_LONG_CHAINED_DEPS,
-          INCLUDE_TARGET_PARALLEL_DEPS);
+      CodeGenerator codeGenerator = new JavaCodeGenerator();
+      codeGenerator.generateNewProject(copyDir + codeGenerator.getDirSuffix(), ALL_TARGET_NAMES);
+
+      codeGenerator = new CppCodeGenerator();
+      codeGenerator.generateNewProject(copyDir + codeGenerator.getDirSuffix(), ALL_TARGET_NAMES);
     }
 
     // Clean generated code path

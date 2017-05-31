@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.buildeventstream.transports;
 
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
+import com.google.devtools.common.options.OptionsParser.OptionUsageRestrictions;
 
 /** Options used to configure BuildEventStreamer and its BuildEventTransports. */
 public class BuildEventStreamOptions extends OptionsBase {
@@ -23,7 +24,7 @@ public class BuildEventStreamOptions extends OptionsBase {
   @Option(
     name = "experimental_build_event_text_file",
     defaultValue = "",
-    category = "hidden",
+    optionUsageRestrictions = OptionUsageRestrictions.HIDDEN,
     help = "If non-empty, write a textual representation of the build event protocol to that file"
   )
   public String buildEventTextFile;
@@ -31,12 +32,34 @@ public class BuildEventStreamOptions extends OptionsBase {
   @Option(
     name = "experimental_build_event_binary_file",
     defaultValue = "",
-    category = "hidden",
+    optionUsageRestrictions = OptionUsageRestrictions.HIDDEN,
     help =
         "If non-empty, write a varint delimited binary representation of representation of the"
             + " build event protocol to that file."
   )
   public String buildEventBinaryFile;
+
+  @Option(
+    name = "experimental_build_event_text_file_path_conversion",
+    defaultValue = "true",
+    optionUsageRestrictions = OptionUsageRestrictions.HIDDEN,
+    help =
+        "Convert paths in the text file representation of the build event protocol to more "
+            + "globally valid URIs whenever possible; if disabled, the file:// uri scheme will "
+            + "always be used"
+  )
+  public boolean buildEventTextFilePathConversion;
+
+  @Option(
+    name = "experimental_build_event_binary_file_path_conversion",
+    defaultValue = "true",
+    optionUsageRestrictions = OptionUsageRestrictions.HIDDEN,
+    help =
+        "Convert paths in the binary file representation of the build event protocol to more "
+            + "globally valid URIs whenever possible; if disabled, the file:// uri scheme will "
+            + "always be used"
+  )
+  public boolean buildEventBinaryFilePathConversion;
 
   public String getBuildEventTextFile() {
     return buildEventTextFile;
@@ -44,5 +67,13 @@ public class BuildEventStreamOptions extends OptionsBase {
 
   public String getBuildEventBinaryFile() {
     return buildEventBinaryFile;
+  }
+
+  public boolean getBuildEventTextFilePathConversion() {
+    return buildEventTextFilePathConversion;
+  }
+
+  public boolean getBuildEventBinaryFilePathConversion() {
+    return buildEventBinaryFilePathConversion;
   }
 }

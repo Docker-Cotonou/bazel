@@ -42,7 +42,6 @@ import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.packages.PackageFactory;
-import com.google.devtools.build.lib.packages.Preprocessor;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.util.MockToolsConfig;
 import com.google.devtools.build.lib.skyframe.DiffAwareness;
@@ -52,6 +51,7 @@ import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
+import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -224,6 +224,19 @@ public class LoadingPhaseRunnerTest {
     LoadingResult loadingResult = assertNoErrors(tester.loadTests("//tests:all"));
     assertThat(loadingResult.getTargets())
         .containsExactlyElementsIn(getTargets("//tests:t1", "//tests:t2"));
+    assertThat(loadingResult.getTestsToRun())
+        .containsExactlyElementsIn(getTargets("//tests:t1", "//tests:t2"));
+    assertThat(tester.getFilteredTargets()).containsExactlyElementsIn(getTargets());
+    assertThat(tester.getTestFilteredTargets()).containsExactlyElementsIn(getTargets());
+  }
+
+  @Test
+  public void testTestFilteringIncludingManual() throws Exception {
+    writeBuildFilesForTestFiltering();
+    tester.useLoadingOptions("--build_manual_tests");
+    LoadingResult loadingResult = assertNoErrors(tester.loadTests("//tests:all"));
+    assertThat(loadingResult.getTargets())
+        .containsExactlyElementsIn(getTargets("//tests:t1", "//tests:t2", "//tests:t3"));
     assertThat(loadingResult.getTestsToRun())
         .containsExactlyElementsIn(getTargets("//tests:t1", "//tests:t2"));
     assertThat(tester.getFilteredTargets()).containsExactlyElementsIn(getTargets());
@@ -455,8 +468,8 @@ public class LoadingPhaseRunnerTest {
     tester.getWorkspace().getChild("broken").createDirectory();
 
     // Create a circular symlink.
-    tester.getWorkspace().getRelative(new PathFragment("broken/BUILD"))
-        .createSymbolicLink(new PathFragment("BUILD"));
+    tester.getWorkspace().getRelative(PathFragment.create("broken/BUILD"))
+        .createSymbolicLink(PathFragment.create("BUILD"));
 
     assertCircularSymlinksDuringTargetParsing("//broken/...");
   }
@@ -466,10 +479,10 @@ public class LoadingPhaseRunnerTest {
     tester.getWorkspace().getChild("broken").createDirectory();
 
     // Create a circular symlink.
-    tester.getWorkspace().getRelative(new PathFragment("broken/BUILD"))
-        .createSymbolicLink(new PathFragment("x"));
-    tester.getWorkspace().getRelative(new PathFragment("broken/x"))
-        .createSymbolicLink(new PathFragment("BUILD"));
+    tester.getWorkspace().getRelative(PathFragment.create("broken/BUILD"))
+        .createSymbolicLink(PathFragment.create("x"));
+    tester.getWorkspace().getRelative(PathFragment.create("broken/x"))
+        .createSymbolicLink(PathFragment.create("BUILD"));
 
     assertCircularSymlinksDuringTargetParsing("//broken/...");
   }
@@ -609,7 +622,6 @@ public class LoadingPhaseRunnerTest {
               ruleClassProvider.getBuildInfoFactories(),
               ImmutableList.<DiffAwareness.Factory>of(),
               Predicates.<PathFragment>alwaysFalse(),
-              Preprocessor.Factory.Supplier.NullSupplier.INSTANCE,
               analysisMock.getSkyFunctions(),
               ImmutableList.<PrecomputedValue.Injected>of(),
               ImmutableList.<SkyValueDirtinessChecker>of(),
@@ -625,6 +637,7 @@ public class LoadingPhaseRunnerTest {
       skyframeExecutor.preparePackageLoading(
           pkgLocator,
           packageCacheOptions,
+          Options.getDefaults(SkylarkSemanticsOptions.class),
           analysisMock.getDefaultsPackageContent(),
           UUID.randomUUID(),
           ImmutableMap.<String, String>of(),

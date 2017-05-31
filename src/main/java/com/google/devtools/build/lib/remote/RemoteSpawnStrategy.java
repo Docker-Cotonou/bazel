@@ -21,7 +21,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ActionInputHelper;
+import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
@@ -30,9 +30,9 @@ import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
-import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.remote.ContentDigests.ActionKey;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Action;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ActionResult;
@@ -43,9 +43,11 @@ import com.google.devtools.build.lib.remote.RemoteProtocol.ExecuteRequest;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ExecutionStatus;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Platform;
 import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
+import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.TextFormat;
 import com.google.protobuf.TextFormat.ParseException;
 import io.grpc.StatusRuntimeException;
@@ -54,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.SortedMap;
 import java.util.TreeSet;
 import com.google.devtools.build.lib.worker.WorkerSpawnStrategy;
 import com.google.devtools.build.lib.exec.ActionContextProvider;
@@ -75,6 +78,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
   private final RemoteOptions options;
   // TODO(olaola): This will be set on a per-action basis instead.
   private final Platform platform;
+  private final ChannelOptions channelOptions;
+  private final SpawnInputExpander spawnInputExpander = new SpawnInputExpander(/*strict=*/ false);
 
   RemoteSpawnStrategy(
       Map<String, String> clientEnv,
@@ -86,12 +91,14 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     this.standaloneStrategy = new StandaloneSpawnStrategy(execRoot, verboseFailures, productName);
     this.verboseFailures = verboseFailures;
     this.options = options;
+    channelOptions = ChannelOptions.create(options);
     if (options.experimentalRemotePlatformOverride != null) {
       Platform.Builder platformBuilder = Platform.newBuilder();
       try {
         TextFormat.getParser().merge(options.experimentalRemotePlatformOverride, platformBuilder);
       } catch (ParseException e) {
-        throw new RuntimeException("Failed to parse --experimental_remote_platform_override", e);
+        throw new IllegalArgumentException(
+            "Failed to parse --experimental_remote_platform_override", e);
       }
       platform = platformBuilder.build();
     } else {
@@ -180,11 +187,27 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     if (options.remoteLocalExecUploadResults && actionCache != null && actionKey != null) {
       ArrayList<Path> outputFiles = new ArrayList<>();
       for (ActionInput output : spawn.getOutputFiles()) {
-        outputFiles.add(execRoot.getRelative(output.getExecPathString()));
+        Path outputFile = execRoot.getRelative(output.getExecPathString());
+        // Ignore non-existent files.
+        // TODO(ulfjack): This is not ideal - in general, all spawn strategies should stat the
+        // output files and return a list of existing files. We shouldn't re-stat the files here.
+        if (!outputFile.exists()) {
+          continue;
+        }
+        outputFiles.add(outputFile);
       }
       try {
         ActionResult.Builder result = ActionResult.newBuilder();
         actionCache.uploadAllResults(execRoot, outputFiles, result);
+        FileOutErr outErr = actionExecutionContext.getFileOutErr();
+        if (outErr.getErrorPath().exists()) {
+          ContentDigest stderr = actionCache.uploadFileContents(outErr.getErrorPath());
+          result.setStderrDigest(stderr);
+        }
+        if (outErr.getOutputPath().exists()) {
+          ContentDigest stdout = actionCache.uploadFileContents(outErr.getOutputPath());
+          result.setStdoutDigest(stdout);
+        }
         actionCache.setCachedActionResult(actionKey, result.build());
         // Handle all cache errors here.
       } catch (IOException e) {
@@ -232,33 +255,29 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     EventHandler eventHandler = executor.getEventHandler();
 
     RemoteActionCache actionCache = null;
-    RemoteWorkExecutor workExecutor = null;
+    GrpcRemoteExecutor workExecutor = null;
     if (spawn.isRemotable()) {
       // Initialize remote cache and execution handlers. We use separate handlers for every
       // action to enable server-side parallelism (need a different gRPC channel per action).
-      try {
-        if (ConcurrentMapFactory.isRemoteCacheOptions(options)) {
-          actionCache = new ConcurrentMapActionCache(ConcurrentMapFactory.create(options));
-        } else if (GrpcActionCache.isRemoteCacheOptions(options)) {
-          actionCache = new GrpcActionCache(options);
-        } else if (options.s3CacheBucket != null) {
-          actionCache = new S3ActionCache(options);
-        }
-        // Otherwise actionCache remains null and remote caching/execution are disabled.
+      if (SimpleBlobStoreFactory.isRemoteCacheOptions(options)) {
+        actionCache = new SimpleBlobStoreActionCache(SimpleBlobStoreFactory.create(options));
+      } else if (GrpcActionCache.isRemoteCacheOptions(options)) {
+        actionCache = new GrpcActionCache(options, channelOptions);
+      } else if (options.s3CacheBucket != null) {
+        actionCache = new S3ActionCache(options);
+      }
+      // Otherwise actionCache remains null and remote caching/execution are disabled.
 
-        if (actionCache != null && RemoteWorkExecutor.isRemoteExecutionOptions(options)) {
-          workExecutor = new RemoteWorkExecutor(options);
-        }
-      } catch (InvalidConfigurationException e) {
-        eventHandler.handle(Event.warn(e.toString()));
+      if (actionCache != null && GrpcRemoteExecutor.isRemoteExecutionOptions(options)) {
+        workExecutor =
+            new GrpcRemoteExecutor(
+                RemoteUtils.createChannel(options.remoteWorker, channelOptions),
+                channelOptions,
+                options);
       }
     }
     if (!spawn.isRemotable() || actionCache == null) {
       execFallback(spawn, actionExecutionContext);
-      return;
-    }
-    if (workExecutor == null) {
-      execLocally(spawn, actionExecutionContext, actionCache, actionKey);
       return;
     }
     if (executor.reportsSubcommands()) {
@@ -269,11 +288,15 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
 
     try {
       // Temporary hack: the TreeNodeRepository should be created and maintained upstream!
-      TreeNodeRepository repository = new TreeNodeRepository(execRoot);
-      List<ActionInput> inputs =
-          ActionInputHelper.expandArtifacts(
-              spawn.getInputFiles(), actionExecutionContext.getArtifactExpander());
-      TreeNode inputRoot = repository.buildFromActionInputs(inputs);
+      ActionInputFileCache inputFileCache = actionExecutionContext.getActionInputFileCache();
+      TreeNodeRepository repository = new TreeNodeRepository(execRoot, inputFileCache);
+      SortedMap<PathFragment, ActionInput> inputMap =
+          spawnInputExpander.getInputMapping(
+              spawn,
+              actionExecutionContext.getArtifactExpander(),
+              actionExecutionContext.getActionInputFileCache(),
+              actionExecutionContext.getExecutor().getContext(FilesetActionContext.class));
+      TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
       repository.computeMerkleDigests(inputRoot);
       Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
       Action action =
@@ -293,10 +316,16 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
         // just update the TreeNodeRepository and continue the build.
         try {
           actionCache.downloadAllResults(result, execRoot);
+          passRemoteOutErr(actionCache, result, actionExecutionContext.getFileOutErr());
           return;
         } catch (CacheNotFoundException e) {
           acceptCachedResult = false; // Retry the action remotely and invalidate the results.
         }
+      }
+
+      if (workExecutor == null) {
+        execLocally(spawn, actionExecutionContext, actionCache, actionKey);
+        return;
       }
 
       // Upload the command and all the inputs into the remote cache.
@@ -308,7 +337,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
           ExecuteRequest.newBuilder()
               .setAction(action)
               .setAcceptCached(acceptCachedResult)
-              .setTotalInputFileCount(inputs.size())
+              .setTotalInputFileCount(inputMap.size())
               .setTimeoutMillis(1000 * Spawns.getTimeoutSeconds(spawn, 120));
       // TODO(olaola): set sensible local and remote timouts.
       ExecuteReply reply = workExecutor.executeRemotely(request.build());

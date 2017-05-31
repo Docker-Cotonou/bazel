@@ -19,6 +19,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
@@ -33,6 +34,7 @@ import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.SkylarkClassObject;
 import com.google.devtools.build.lib.rules.SkylarkRuleContext;
+import com.google.devtools.build.lib.rules.java.JavaProvider;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
 import com.google.devtools.build.lib.rules.python.PyCommon;
 import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
@@ -42,6 +44,7 @@ import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
@@ -337,6 +340,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
   /* The error message for this case used to be wrong. */
   @Test
   public void testPackageBoundaryError_ExternalRepository() throws Exception {
+    scratch.file("/r/WORKSPACE");
     scratch.file("/r/BUILD", "cc_library(name = 'cclib',", "  srcs = ['sub/my_sub_lib.h'])");
     scratch.file("/r/sub/BUILD", "cc_library(name = 'my_sub_lib', srcs = ['my_sub_lib.h'])");
     scratch.overwriteFile("WORKSPACE",
@@ -429,7 +433,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     Object result = evalRuleContextCode(ruleContext, "ruleContext.attr.srcs");
     // Check for a known provider
     TransitiveInfoCollection tic1 = (TransitiveInfoCollection) ((SkylarkList) result).get(0);
-    assertNotNull(tic1.getProvider(JavaSourceJarsProvider.class));
+    assertNotNull(JavaProvider.getProvider(JavaSourceJarsProvider.class, tic1));
     // Check an unimplemented provider too
     assertNull(tic1.getProvider(SkylarkProviders.class)
         .getValue(PyCommon.PYTHON_SKYLARK_PROVIDER_NAME));
@@ -748,6 +752,31 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     Object result = evalRuleContextCode(ruleContext, "ruleContext.new_file('a/b.txt')");
     PathFragment fragment = ((Artifact) result).getRootRelativePath();
     assertEquals("foo/a/b.txt", fragment.getPathString());
+  }
+
+  @Test
+  public void testDeriveTreeArtifact() throws Exception {
+    SkylarkRuleContext ruleContext = createRuleContext("//foo:foo");
+    Object result =
+        evalRuleContextCode(ruleContext, "ruleContext.experimental_new_directory('a/b')");
+    Artifact artifact = (Artifact) result;
+    PathFragment fragment = artifact.getRootRelativePath();
+    assertEquals("foo/a/b", fragment.getPathString());
+    assertTrue(artifact.isTreeArtifact());
+  }
+
+  @Test
+  public void testDeriveTreeArtifactNextToSibling() throws Exception {
+    SkylarkRuleContext ruleContext = createRuleContext("//foo:foo");
+    Object result =
+        evalRuleContextCode(
+            ruleContext,
+            "b = ruleContext.experimental_new_directory('a/b')\n"
+                + "ruleContext.experimental_new_directory('c', sibling=b)");
+    Artifact artifact = (Artifact) result;
+    PathFragment fragment = artifact.getRootRelativePath();
+    assertEquals("foo/a/c", fragment.getPathString());
+    assertTrue(artifact.isTreeArtifact());
   }
 
   @Test
@@ -1153,6 +1182,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     scratch.file("BUILD",
         "filegroup(name='dep')");
 
+    scratch.file("/r/WORKSPACE");
     scratch.file("/r/a/BUILD",
         "load('/external_rule', 'external_rule')",
         "external_rule(name='r')");
@@ -1184,6 +1214,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
         "  }",
         ")");
 
+    scratch.file("/r/WORKSPACE");
     scratch.file("/r/BUILD",
         "filegroup(name='dep')");
 
@@ -1218,6 +1249,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
         "def macro(name, path):",
         "  native.local_repository(name = name, path = path)"
     );
+    scratch.file("/r2/WORKSPACE");
     scratch.file(
         "/r2/other_test.bzl",
         "def other_macro(name, path):",
@@ -1732,5 +1764,119 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     Label valueLabel =
         (Label) evalRuleContextCode(ruleContext, "ruleContext.attr.runtimes.values()[0]");
     assertThat(valueLabel).isEqualTo(Label.parseAbsolute("//jvm:runtime"));
+  }
+
+  // A list of attributes and methods ctx objects have
+  private final List<String> ctxAttributes = ImmutableList.of(
+      "attr",
+      "split_attr",
+      "executable",
+      "file",
+      "files",
+      "workspace_name",
+      "label",
+      "fragments",
+      "host_fragments",
+      "configuration",
+      "host_configuration",
+      "coverage_instrumented(dep)",
+      "features",
+      "bin_dir",
+      "genfiles_dir",
+      "outputs",
+      "rule",
+      "aspect_ids",
+      "var",
+      "tokenize('foo')",
+      "expand('foo', [], Label('//test:main'))",
+      "new_file('foo.txt')",
+      "new_file(file, 'foo.txt')",
+      "check_placeholders('foo', [])",
+      "action(command = 'foo', outputs = [file])",
+      "file_action(file, 'foo')",
+      "empty_action(mnemonic = 'foo', inputs = [file])",
+      "template_action(template = file, output = file, substitutions = {})",
+      "runfiles()",
+      "resolve_command(command = 'foo')");
+
+  @Test
+  public void testFrozenRuleContextHasInaccessibleAttributes() throws Exception {
+    scratch.file("test/BUILD",
+        "load('/test/rules', 'main_rule', 'dep_rule')",
+        "dep_rule(name = 'dep')",
+        "main_rule(name = 'main', deps = [':dep'])");
+    scratch.file("test/rules.bzl");
+
+    for (String attribute : ctxAttributes) {
+      scratch.overwriteFile("test/rules.bzl",
+          "def _main_impl(ctx):",
+          "  dep = ctx.attr.deps[0]",
+          "  file = ctx.outputs.file",
+          "  foo = dep.dep_ctx." + attribute,
+          "main_rule = rule(",
+          "  implementation = _main_impl,",
+          "  attrs = {",
+          "    'deps': attr.label_list()",
+          "  },",
+          "  outputs = {'file': 'output.txt'},",
+          ")",
+          "def _dep_impl(ctx):",
+          "  return struct(dep_ctx = ctx)",
+          "dep_rule = rule(implementation = _dep_impl)");
+      invalidatePackages();
+      try {
+        getConfiguredTarget("//test:main");
+        fail("Should have been unable to access dep_ctx." + attribute);
+      } catch (AssertionError e) {
+        assertThat(e.getMessage()).contains("cannot access field or method '"
+            + attribute.split("\\(")[0]
+            + "' of rule context for '//test:dep' outside of its own rule implementation function");
+      }
+    }
+  }
+
+  @Test
+  public void testFrozenRuleContextForAspectsHasInaccessibleAttributes() throws Exception {
+    List<String> attributes = new ArrayList<>();
+    attributes.addAll(ctxAttributes);
+    attributes.addAll(ImmutableList.of(
+        "rule.attr",
+        "rule.executable",
+        "rule.file",
+        "rule.files",
+        "rule.kind"));
+    scratch.file("test/BUILD",
+        "load('/test/rules', 'my_rule')",
+        "my_rule(name = 'dep')",
+        "my_rule(name = 'mid', deps = [':dep'])",
+        "my_rule(name = 'main', deps = [':mid'])");
+    scratch.file("test/rules.bzl");
+    for (String attribute : attributes) {
+       scratch.overwriteFile("test/rules.bzl",
+          "def _rule_impl(ctx):",
+          "  pass",
+          "def _aspect_impl(target, ctx):",
+          "  if ctx.rule.attr.deps:",
+          "    dep = ctx.rule.attr.deps[0]",
+          "    file = ctx.new_file('file.txt')",
+          "    foo = dep." + (attribute.startsWith("rule.") ? "" : "ctx.") + attribute,
+          "  return struct(ctx = ctx, rule=ctx.rule)",
+          "MyAspect = aspect(implementation=_aspect_impl)",
+          "my_rule = rule(",
+          "  implementation = _rule_impl,",
+          "  attrs = {",
+          "    'deps': attr.label_list(aspects = [MyAspect])",
+          "  },",
+          ")");
+      invalidatePackages();
+      try {
+        getConfiguredTarget("//test:main");
+        fail("Should have been unable to access dep." + attribute);
+      } catch (AssertionError e) {
+        assertThat(e.getMessage()).contains("cannot access field or method '"
+            + attribute.split("\\(")[0]
+            + "' of rule context for '//test:dep' outside of its own rule implementation function");
+      }
+    }
   }
 }

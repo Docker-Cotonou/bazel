@@ -25,8 +25,10 @@ import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
+import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
+import java.util.List;
 
 /**
  * The set of services that are provided to {@link ConfiguredTarget} objects
@@ -106,7 +108,7 @@ public interface AnalysisEnvironment extends ActionRegistry {
    * Returns the actions that were registered so far with this analysis environment, that is, all
    * the actions that were created by the current target being analyzed.
    */
-  Iterable<ActionAnalysisMetadata> getRegisteredActions();
+  List<ActionAnalysisMetadata> getRegisteredActions();
 
   /**
    * Returns the Skyframe SkyFunction.Environment if available. Otherwise, null.
@@ -115,6 +117,12 @@ public interface AnalysisEnvironment extends ActionRegistry {
    * about that.
    */
   SkyFunction.Environment getSkyframeEnv();
+
+  /**
+   * Returns the options that affect the Skylark interpreter used for evaluating Skylark rule
+   * implementation functions.
+   */
+  SkylarkSemanticsOptions getSkylarkSemantics() throws InterruptedException;
 
   /**
    * Returns the Artifact that is used to hold the non-volatile workspace status for the current

@@ -44,21 +44,18 @@ final class DarwinSandboxRunner extends SandboxRunner {
   private final Path sandboxExecRoot;
   private final Path argumentsFilePath;
   private final Set<Path> writableDirs;
-  private final Set<Path> inaccessiblePaths;
   private final Path runUnderPath;
 
   DarwinSandboxRunner(
       Path sandboxPath,
       Path sandboxExecRoot,
       Set<Path> writableDirs,
-      Set<Path> inaccessiblePaths,
       Path runUnderPath,
       boolean verboseFailures) {
     super(verboseFailures);
     this.sandboxExecRoot = sandboxExecRoot;
     this.argumentsFilePath = sandboxPath.getRelative("sandbox.sb");
     this.writableDirs = writableDirs;
-    this.inaccessiblePaths = inaccessiblePaths;
     this.runUnderPath = runUnderPath;
   }
 
@@ -67,8 +64,8 @@ final class DarwinSandboxRunner extends SandboxRunner {
     // And we should check if sandbox still work when it gets 11.x
     String osxVersion = OS.getVersion();
     String[] parts = osxVersion.split("\\.");
-    if (parts.length != 3) {
-      // Currently the format is 10.11.x
+    if (parts.length < 2 || parts.length > 3) {
+      // Can be 10.xx or 10.xx.yy format
       return false;
     }
     try {
@@ -111,7 +108,8 @@ final class DarwinSandboxRunner extends SandboxRunner {
       Map<String, String> environment,
       int timeout,
       boolean allowNetwork,
-      boolean useFakeHostname)
+      boolean useFakeHostname,
+      boolean useFakeUsername)
       throws IOException {
     writeConfig(allowNetwork);
 
@@ -141,9 +139,6 @@ final class DarwinSandboxRunner extends SandboxRunner {
       out.println("(allow network* (local ip \"localhost:*\"))");
       out.println("(allow network* (remote ip \"localhost:*\"))");
 
-      for (Path inaccessiblePath : inaccessiblePaths) {
-        out.println("(deny file-read* (subpath \"" + inaccessiblePath + "\"))");
-      }
       if (runUnderPath != null) {
         out.println("(allow file-read* (subpath \"" + runUnderPath + "\"))");
       }

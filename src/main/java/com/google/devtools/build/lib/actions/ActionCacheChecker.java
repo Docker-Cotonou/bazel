@@ -328,7 +328,7 @@ public class ActionCacheChecker {
 
   @Nullable
   public Iterable<Artifact> getCachedInputs(Action action, PackageRootResolver resolver)
-      throws PackageRootResolutionException, InterruptedException {
+      throws InterruptedException {
     ActionCache.Entry entry = getCacheEntry(action);
     if (entry == null || entry.isCorrupted()) {
       return ImmutableList.of();
@@ -340,7 +340,7 @@ public class ActionCacheChecker {
     }
     List<PathFragment> inputExecPaths = new ArrayList<>();
     for (String path : entry.getPaths()) {
-      PathFragment execPath = new PathFragment(path);
+      PathFragment execPath = PathFragment.create(path);
       // Code assumes that action has only 1-2 outputs and ArrayList.contains() will be
       // most efficient.
       if (!outputs.contains(execPath)) {

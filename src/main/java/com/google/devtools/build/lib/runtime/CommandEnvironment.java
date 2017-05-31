@@ -42,6 +42,7 @@ import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.skyframe.SkyframeBuildView;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
+import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -145,6 +146,24 @@ public final class CommandEnvironment {
     this.workingDirectory = directories.getWorkspace();
 
     workspace.getSkyframeExecutor().setEventBus(eventBus);
+  }
+
+  /**
+   * Same as CommandEnvironment(BlazeRuntime, BlazeWorkspace, EventBus, Thread) but with an
+   * explicit commandName and options.
+   *
+   * ONLY for testing.
+   */
+  @VisibleForTesting
+  CommandEnvironment(
+      BlazeRuntime runtime, BlazeWorkspace workspace, EventBus eventBus, Thread commandThread,
+      String commandNameForTesting, OptionsProvider optionsForTesting) {
+    this(runtime, workspace, eventBus, commandThread);
+    // Both commandName and options are normally set by beforeCommand(); however this method is not
+    // called in tests (i.e. tests use BlazeRuntimeWrapper). These fields should only be set for
+    // testing.
+    this.commandName = commandNameForTesting;
+    this.options = optionsForTesting;
   }
 
   public BlazeRuntime getRuntime() {
@@ -325,6 +344,14 @@ public final class CommandEnvironment {
   }
 
   /**
+   * Returns the directory where actions' outputs and errors will be written. Is below the directory
+   * returned by {@link #getExecRoot}.
+   */
+  public Path getActionConsoleOutputDirectory() {
+    return getDirectories().getActionConsoleOutputDirectory(getExecRoot());
+  }
+
+  /**
    * Returns the working directory of the {@code blaze} client process.
    *
    * <p>This may be equal to {@code BlazeRuntime#getWorkspace()}, or beneath it.
@@ -459,7 +486,8 @@ public final class CommandEnvironment {
 
   /**
    * Initializes the package cache using the given options, and syncs the package cache. Also
-   * injects a defaults package using the options for the {@link BuildConfiguration}.
+   * injects a defaults package and the skylark semantics using the options for the {@link
+   * BuildConfiguration}.
    *
    * @see DefaultsPackage
    */
@@ -469,9 +497,14 @@ public final class CommandEnvironment {
     if (!skyframeExecutor.hasIncrementalState()) {
       skyframeExecutor.resetEvaluator();
     }
+
+    for (BlazeModule module : runtime.getBlazeModules()) {
+      skyframeExecutor.injectExtraPrecomputedValues(module.getPrecomputedValues());
+    }
     skyframeExecutor.sync(
         reporter,
         options.getOptions(PackageCacheOptions.class),
+        options.getOptions(SkylarkSemanticsOptions.class),
         getOutputBase(),
         getWorkingDirectory(),
         defaultsPackageContents,

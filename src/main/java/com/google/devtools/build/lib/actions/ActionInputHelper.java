@@ -69,6 +69,7 @@ public final class ActionInputHelper {
    */
   private static class BasicActionInput implements ActionInput {
     private final String path;
+
     public BasicActionInput(String path) {
       this.path = Preconditions.checkNotNull(path);
     }
@@ -76,6 +77,11 @@ public final class ActionInputHelper {
     @Override
     public String getExecPathString() {
       return path;
+    }
+
+    @Override
+    public PathFragment getExecPath() {
+      return PathFragment.create(path);
     }
 
     @Override
@@ -164,7 +170,7 @@ public final class ActionInputHelper {
    * relative to that Artifact.
    */
   public static TreeFileArtifact treeFileArtifact(Artifact parent, String relativePath) {
-    return treeFileArtifact(parent, new PathFragment(relativePath));
+    return treeFileArtifact(parent, PathFragment.create(relativePath));
   }
 
   /** Returns an Iterable of TreeFileArtifacts with the given parent and parent relative paths. */

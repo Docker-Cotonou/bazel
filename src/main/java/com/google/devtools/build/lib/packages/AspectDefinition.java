@@ -68,6 +68,7 @@ public final class AspectDefinition {
    */
   @Nullable private final ImmutableSet<String> restrictToAttributes;
   @Nullable private final ConfigurationFragmentPolicy configurationFragmentPolicy;
+  private final boolean applyToFiles;
 
   public AdvertisedProviderSet getAdvertisedProviders() {
     return advertisedProviders;
@@ -81,7 +82,8 @@ public final class AspectDefinition {
       RequiredProviders requiredAspectProviders,
       ImmutableMap<String, Attribute> attributes,
       @Nullable ImmutableSet<String> restrictToAttributes,
-      @Nullable ConfigurationFragmentPolicy configurationFragmentPolicy) {
+      @Nullable ConfigurationFragmentPolicy configurationFragmentPolicy,
+      boolean applyToFiles) {
     this.aspectClass = aspectClass;
     this.advertisedProviders = advertisedProviders;
     this.requiredProviders = requiredProviders;
@@ -90,6 +92,7 @@ public final class AspectDefinition {
     this.attributes = attributes;
     this.restrictToAttributes = restrictToAttributes;
     this.configurationFragmentPolicy = configurationFragmentPolicy;
+    this.applyToFiles = applyToFiles;
   }
 
   public String getName() {
@@ -147,6 +150,15 @@ public final class AspectDefinition {
   }
 
   /**
+   * Returns whether this aspect applies to files.
+   *
+   * Currently only supported for top-level aspects and targets.
+   */
+  public boolean applyToFiles() {
+    return applyToFiles;
+  }
+
+  /**
    * Returns the attribute -&gt; set of labels that are provided by aspects of attribute.
    */
   public static ImmutableMultimap<Attribute, Label> visitAspectsIfRequired(
@@ -195,28 +207,27 @@ public final class AspectDefinition {
       final Multimap<Attribute, Label> labelBuilder,
       Aspect aspect,
       DependencyFilter dependencyFilter) {
+    LabelVisitor<Attribute> labelVisitor = new LabelVisitor<Attribute>() {
+      @Override
+      public void visit(Label label, Attribute aspectAttribute) {
+        Label repositoryRelative = maybeGetRepositoryRelativeLabel(from, label);
+        if (repositoryRelative == null) {
+          return;
+        }
+        labelBuilder.put(aspectAttribute, repositoryRelative);
+      }
+    };
     ImmutableMap<String, Attribute> attributes = aspect.getDefinition().getAttributes();
     for (final Attribute aspectAttribute : attributes.values()) {
       if (!dependencyFilter.apply(aspect, aspectAttribute)) {
         continue;
       }
-      Type type = aspectAttribute.getType();
+      Type<?> type = aspectAttribute.getType();
       if (type.getLabelClass() != LabelClass.DEPENDENCY) {
         continue;
       }
       try {
-        type.visitLabels(
-            new LabelVisitor() {
-              @Override
-              public void visit(Label label) {
-                Label repositoryRelative = maybeGetRepositoryRelativeLabel(from, label);
-                if (repositoryRelative == null) {
-                  return;
-                }
-                labelBuilder.put(aspectAttribute, repositoryRelative);
-              }
-            },
-            aspectAttribute.getDefaultValue(from));
+        type.visitLabels(labelVisitor, aspectAttribute.getDefaultValue(from), aspectAttribute);
       } catch (InterruptedException ex) {
         // Because the LabelVisitor does not throw InterruptedException, it should not be thrown
         // by visitLabels here.
@@ -244,6 +255,7 @@ public final class AspectDefinition {
     private LinkedHashSet<String> propagateAlongAttributes = new LinkedHashSet<>();
     private final ConfigurationFragmentPolicy.Builder configurationFragmentPolicy =
         new ConfigurationFragmentPolicy.Builder();
+    private boolean applyToFiles = false;
 
     public Builder(AspectClass aspectClass) {
       this.aspectClass = aspectClass;
@@ -433,6 +445,17 @@ public final class AspectDefinition {
       return this;
     }
 
+    /**
+     * Sets whether this aspect should apply to files.
+     *
+     * Default is <code>false</code>.
+     * Currently only supported for top-level aspects and targets.
+     */
+    public Builder applyToFiles(boolean propagateOverGeneratedFiles) {
+      this.applyToFiles = propagateOverGeneratedFiles;
+      return this;
+    }
+
 
     /**
      * Builds the aspect definition.
@@ -448,7 +471,8 @@ public final class AspectDefinition {
           propagateAlongAttributes == null
               ? null
               : ImmutableSet.copyOf(propagateAlongAttributes),
-          configurationFragmentPolicy.build());
+          configurationFragmentPolicy.build(),
+          applyToFiles);
     }
   }
 }

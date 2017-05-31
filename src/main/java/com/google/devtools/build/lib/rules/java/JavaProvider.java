@@ -17,6 +17,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.SkylarkProviders;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
@@ -26,6 +27,7 @@ import com.google.devtools.build.lib.packages.ClassObjectConstructor;
 import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
 import com.google.devtools.build.lib.packages.SkylarkClassObject;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import javax.annotation.Nullable;
@@ -42,7 +44,8 @@ public final class JavaProvider extends SkylarkClassObject implements Transitive
         JavaCompilationArgsProvider.class,
         JavaSourceJarsProvider.class,
         ProtoJavaApiInfoAspectProvider.class,
-        JavaRuleOutputJarsProvider.class
+        JavaRuleOutputJarsProvider.class,
+        JavaRunfilesProvider.class
       );
 
   private final TransitiveInfoProviderMap providers;
@@ -69,6 +72,14 @@ public final class JavaProvider extends SkylarkClassObject implements Transitive
         JavaProvider.fetchProvidersFromList(providers, JavaSourceJarsProvider.class);
     List<ProtoJavaApiInfoAspectProvider> protoJavaApiInfoAspectProviders =
         JavaProvider.fetchProvidersFromList(providers, ProtoJavaApiInfoAspectProvider.class);
+    List<JavaRunfilesProvider> javaRunfilesProviders =
+        JavaProvider.fetchProvidersFromList(providers, JavaRunfilesProvider.class);
+
+    Runfiles mergedRunfiles = Runfiles.EMPTY;
+    for (JavaRunfilesProvider javaRunfilesProvider : javaRunfilesProviders) {
+      Runfiles runfiles = javaRunfilesProvider.getRunfiles();
+      mergedRunfiles = mergedRunfiles == Runfiles.EMPTY ? runfiles : mergedRunfiles.merge(runfiles);
+    }
 
     return JavaProvider.Builder.create()
         .addProvider(
@@ -82,6 +93,7 @@ public final class JavaProvider extends SkylarkClassObject implements Transitive
         // When a rule merges multiple JavaProviders, its purpose is to pass on information, so
         // it doesn't have any output jars.
         .addProvider(JavaRuleOutputJarsProvider.class, JavaRuleOutputJarsProvider.builder().build())
+        .addProvider(JavaRunfilesProvider.class, new JavaRunfilesProvider(mergedRunfiles))
         .build();
   }
 
@@ -93,7 +105,7 @@ public final class JavaProvider extends SkylarkClassObject implements Transitive
    * JavaCompilationArgsProvider.
    */
   public static <C extends TransitiveInfoProvider> List<C> fetchProvidersFromList(
-      List<JavaProvider> javaProviders, Class<C> providersClass) {
+      Iterable<JavaProvider> javaProviders, Class<C> providersClass) {
     List<C> fetchedProviders = new LinkedList<>();
     for (JavaProvider javaProvider : javaProviders) {
       C provider = javaProvider.getProvider(providersClass);
@@ -130,6 +142,18 @@ public final class JavaProvider extends SkylarkClassObject implements Transitive
       return null;
     }
     return javaProvider.getProvider(providerClass);
+  }
+
+  public static <T extends TransitiveInfoProvider> List<T> getProvidersFromListOfTargets(
+      Class<T> providerClass, Iterable<? extends TransitiveInfoCollection> targets) {
+    List<T> providersList = new ArrayList<>();
+    for (TransitiveInfoCollection target : targets) {
+      T provider = getProvider(providerClass, target);
+      if (provider != null) {
+        providersList.add(provider);
+      }
+    }
+    return providersList;
   }
 
   private JavaProvider(TransitiveInfoProviderMap providers) {

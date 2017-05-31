@@ -166,7 +166,6 @@ public class AndroidResourceMergingAction {
 
     Preconditions.checkNotNull(options.primaryData);
     Preconditions.checkNotNull(options.primaryManifest);
-    Preconditions.checkNotNull(options.classJarOutput);
 
     try (ScopedTemporaryDirectory scopedTmp =
         new ScopedTemporaryDirectory("android_resource_merge_tmp")) {
@@ -218,10 +217,12 @@ public class AndroidResourceMergingAction {
         AndroidResourceOutputs.copyManifestToOutput(processedData, options.manifestOutput);
       }
 
-      AndroidResourceOutputs.createClassJar(generatedSources, options.classJarOutput);
-
-      logger.fine(
-          String.format("Create classJar finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
+      if (options.classJarOutput != null) {
+        AndroidResourceOutputs.createClassJar(generatedSources, options.classJarOutput);
+        logger.fine(
+            String.format(
+                "Create classJar finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
+      }
 
       if (options.resourcesOutput != null) {
         Path resourcesDir =

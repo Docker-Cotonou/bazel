@@ -40,7 +40,6 @@ import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplic
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector.InstrumentationSpec;
 import com.google.devtools.build.lib.util.FileTypeSet;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
 
 /**
  * Rule class definitions for C++ rules.
@@ -56,10 +55,7 @@ public class CppRuleClasses {
       // This attribute connects a target to the LIPO context target configured with the
       // lipo input collector configuration.
       CppConfiguration cppConfiguration = configuration.getFragment(CppConfiguration.class);
-      return !cppConfiguration.isLipoContextCollector()
-          && (cppConfiguration.getLipoMode() == LipoMode.BINARY)
-          ? cppConfiguration.getLipoContextLabel()
-          : null;
+      return cppConfiguration.isLipoOptimization() ? cppConfiguration.getLipoContextLabel() : null;
     }
   };
 
@@ -86,6 +82,28 @@ public class CppRuleClasses {
       return true;
     }
   }
+
+  /**
+   * Label of a pseudo-filegroup that contains all crosstool and libcfiles for all configurations,
+   * as specified on the command-line.
+   */
+  public static final String CROSSTOOL_LABEL = "//tools/defaults:crosstool";
+
+  public static final LateBoundLabel<BuildConfiguration> DEFAULT_MALLOC =
+      new LateBoundLabel<BuildConfiguration>() {
+        @Override
+        public Label resolve(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+          return configuration.getFragment(CppConfiguration.class).customMalloc();
+        }
+      };
+
+  public static final LateBoundLabel<BuildConfiguration> CC_TOOLCHAIN =
+      new LateBoundLabel<BuildConfiguration>(CROSSTOOL_LABEL, CppConfiguration.class) {
+        @Override
+        public Label resolve(Rule rule, AttributeMap attributes, BuildConfiguration configuration) {
+          return configuration.getFragment(CppConfiguration.class).getCcToolchainRuleLabel();
+        }
+      };
 
   // Artifacts of these types are discarded from the 'hdrs' attribute in cc rules
   static final FileTypeSet DISALLOWED_HDRS_FILES = FileTypeSet.of(
@@ -260,6 +278,15 @@ public class CppRuleClasses {
    * A string constant for the ThinLTO feature.
    */
   public static final String THIN_LTO = "thin_lto";
+
+  /**
+   * A string constant for the PDB file generation feature, should only be used for toolchains
+   * targeting Windows that include a linker producing PDB files
+   */
+  public static final String GENERATE_PDB_FILE = "generate_pdb_file";
+
+  /** A string constant for /showIncludes parsing feature, should only be used for MSVC toolchain */
+  public static final String PARSE_SHOWINCLUDES = "parse_showincludes";
 
   /*
    * A string constant for the fdo_instrument feature.

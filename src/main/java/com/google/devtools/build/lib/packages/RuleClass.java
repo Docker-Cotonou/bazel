@@ -106,8 +106,10 @@ import javax.annotation.concurrent.Immutable;
 public class RuleClass {
   static final Function<? super Rule, Map<String, Label>> NO_EXTERNAL_BINDINGS =
       Functions.<Map<String, Label>>constant(ImmutableMap.<String, Label>of());
+  static final Function<? super Rule, Set<String>> NO_OPTION_REFERENCE =
+      Functions.<Set<String>>constant(ImmutableSet.<String>of());
 
-  public static final PathFragment THIRD_PARTY_PREFIX = new PathFragment("third_party");
+  public static final PathFragment THIRD_PARTY_PREFIX = PathFragment.create("third_party");
 
   /**
    * A constraint for the package name of the Rule instances.
@@ -445,6 +447,22 @@ public class RuleClass {
       }
     }
 
+    /**
+     * A RuleTransitionFactory which always returns the same transition.
+     */
+    private static final class FixedTransitionFactory implements RuleTransitionFactory {
+      private final Transition transition;
+
+      private FixedTransitionFactory(Transition transition) {
+        this.transition = transition;
+      }
+
+      @Override
+      public Transition buildTransitionFor(Rule rule) {
+        return transition;
+      }
+    }
+
     /** List of required attributes for normal rules, name and type. */
     public static final ImmutableList<Attribute> REQUIRED_ATTRIBUTES_FOR_NORMAL_RULES =
         ImmutableList.of(attr("tags", Type.STRING_LIST).build());
@@ -468,9 +486,10 @@ public class RuleClass {
     private boolean binaryOutput = true;
     private boolean workspaceOnly = false;
     private boolean outputsDefaultExecutable = false;
+    private boolean isConfigMatcher = false;
     private ImplicitOutputsFunction implicitOutputsFunction = ImplicitOutputsFunction.NONE;
     private Configurator<?, ?> configurator = NO_CHANGE;
-    private Transition transition;
+    private RuleTransitionFactory transitionFactory;
     private ConfiguredTargetFactory<?, ?> configuredTargetFactory = null;
     private PredicateWithMessage<Rule> validityPredicate =
         PredicatesWithMessage.<Rule>alwaysTrue();
@@ -479,6 +498,8 @@ public class RuleClass {
     private BaseFunction configuredTargetFunction = null;
     private Function<? super Rule, Map<String, Label>> externalBindingsFunction =
         NO_EXTERNAL_BINDINGS;
+    private Function<? super Rule, ? extends Set<String>> optionReferenceFunction =
+        NO_OPTION_REFERENCE;
     @Nullable private Environment ruleDefinitionEnvironment = null;
     @Nullable private String ruleDefinitionEnvironmentHashCode = null;
     private ConfigurationFragmentPolicy.Builder configurationFragmentPolicy =
@@ -583,14 +604,16 @@ public class RuleClass {
           workspaceOnly,
           outputsDefaultExecutable,
           implicitOutputsFunction,
+          isConfigMatcher,
           configurator,
-          transition,
+          transitionFactory,
           configuredTargetFactory,
           validityPredicate,
           preferredDependencyPredicate,
           advertisedProviders.build(),
           configuredTargetFunction,
           externalBindingsFunction,
+          optionReferenceFunction,
           ruleDefinitionEnvironment,
           ruleDefinitionEnvironmentHashCode,
           configurationFragmentPolicy.build(),
@@ -718,8 +741,9 @@ public class RuleClass {
     public Builder cfg(Configurator<?, ?> configurator) {
       Preconditions.checkState(type != RuleClassType.ABSTRACT,
           "Setting not inherited property (cfg) of abstract rule class '%s'", name);
-      Preconditions.checkState(transition == null,
-          "Property cfg cannot be set to both a configurator and a transition");
+      Preconditions.checkState(this.transitionFactory == null && this.configurator == NO_CHANGE,
+          "Property cfg has already been set");
+      Preconditions.checkNotNull(configurator);
       this.configurator = configurator;
       return this;
     }
@@ -734,9 +758,20 @@ public class RuleClass {
     public Builder cfg(Transition transition) {
       Preconditions.checkState(type != RuleClassType.ABSTRACT,
           "Setting not inherited property (cfg) of abstract rule class '%s'", name);
-      Preconditions.checkState(configurator == NO_CHANGE,
-          "Property cfg cannot be set to both a configurator and a transition");
-      this.transition = transition;
+      Preconditions.checkState(this.transitionFactory == null && this.configurator == NO_CHANGE,
+          "Property cfg has already been set");
+      Preconditions.checkNotNull(transition);
+      this.transitionFactory = new FixedTransitionFactory(transition);
+      return this;
+    }
+
+    public Builder cfg(RuleTransitionFactory transitionFactory) {
+      Preconditions.checkState(type != RuleClassType.ABSTRACT,
+          "Setting not inherited property (cfg) of abstract rule class '%s'", name);
+      Preconditions.checkState(this.transitionFactory == null && this.configurator == NO_CHANGE,
+          "Property cfg has already been set");
+      Preconditions.checkNotNull(transitionFactory);
+      this.transitionFactory = transitionFactory;
       return this;
     }
 
@@ -941,6 +976,29 @@ public class RuleClass {
     }
 
     /**
+     * Causes rules of this type to be evaluated with the parent's configuration, always, so that
+     * rules which match against parts of the configuration will behave as expected.
+     *
+     * <p>This is only intended for use by {@code config_setting} - other rules should not use this!
+     */
+    public Builder setIsConfigMatcherForConfigSettingOnly() {
+      this.isConfigMatcher = true;
+      return this;
+    }
+
+    /**
+     * Causes rules of this type to implicitly reference the configuration fragments associated with
+     * the options its attributes reference.
+     *
+     * <p>This is only intended for use by {@code config_setting} - other rules should not use this!
+     */
+    public Builder setOptionReferenceFunctionForConfigSettingOnly(
+        Function<? super Rule, ? extends Set<String>> optionReferenceFunction) {
+      this.optionReferenceFunction = Preconditions.checkNotNull(optionReferenceFunction);
+      return this;
+    }
+
+    /**
      * Returns an Attribute.Builder object which contains a replica of the
      * same attribute in the parent rule if exists.
      *
@@ -971,6 +1029,7 @@ public class RuleClass {
   private final boolean binaryOutput;
   private final boolean workspaceOnly;
   private final boolean outputsDefaultExecutable;
+  private final boolean isConfigMatcher;
 
   /**
    * A (unordered) mapping from attribute names to small integers indexing into
@@ -1000,12 +1059,10 @@ public class RuleClass {
   private final Configurator<?, ?> configurator;
 
   /**
-   * A configuration transition that should be applied on any edge of the configured target graph
-   * that leads into a target of this rule class.
-   *
-   * <p>This transition must be a PatchTransition, but that class is not accessible in this package.
+   * A factory which will produce a configuration transition that should be applied on any edge of
+   * the configured target graph that leads into a target of this rule class.
    */
-  private final Transition transition;
+  private final RuleTransitionFactory transitionFactory;
 
   /**
    * The factory that creates configured targets from this rule.
@@ -1036,6 +1093,11 @@ public class RuleClass {
    * Returns the extra bindings a workspace function adds to the WORKSPACE file.
    */
   private final Function<? super Rule, Map<String, Label>> externalBindingsFunction;
+
+  /**
+   * Returns the options referenced by this rule's attributes.
+   */
+  private final Function<? super Rule, ? extends Set<String>> optionReferenceFunction;
 
   /**
    * The Skylark rule definition environment of this RuleClass.
@@ -1089,14 +1151,16 @@ public class RuleClass {
       boolean workspaceOnly,
       boolean outputsDefaultExecutable,
       ImplicitOutputsFunction implicitOutputsFunction,
+      boolean isConfigMatcher,
       Configurator<?, ?> configurator,
-      Transition transition,
+      RuleTransitionFactory transitionFactory,
       ConfiguredTargetFactory<?, ?> configuredTargetFactory,
       PredicateWithMessage<Rule> validityPredicate,
       Predicate<String> preferredDependencyPredicate,
       AdvertisedProviderSet advertisedProviders,
       @Nullable BaseFunction configuredTargetFunction,
       Function<? super Rule, Map<String, Label>> externalBindingsFunction,
+      Function<? super Rule, ? extends Set<String>> optionReferenceFunction,
       @Nullable Environment ruleDefinitionEnvironment,
       String ruleDefinitionEnvironmentHashCode,
       ConfigurationFragmentPolicy configurationFragmentPolicy,
@@ -1104,21 +1168,23 @@ public class RuleClass {
       Attribute... attributes) {
     this.name = name;
     this.isSkylark = isSkylark;
-    this.targetKind = name + " rule";
+    this.targetKind = name + Rule.targetKindSuffix();
     this.skylarkExecutable = skylarkExecutable;
     this.skylarkTestable = skylarkTestable;
     this.documented = documented;
     this.publicByDefault = publicByDefault;
     this.binaryOutput = binaryOutput;
     this.implicitOutputsFunction = implicitOutputsFunction;
+    this.isConfigMatcher = isConfigMatcher;
     this.configurator = Preconditions.checkNotNull(configurator);
-    this.transition = transition;
+    this.transitionFactory = transitionFactory;
     this.configuredTargetFactory = configuredTargetFactory;
     this.validityPredicate = validityPredicate;
     this.preferredDependencyPredicate = preferredDependencyPredicate;
     this.advertisedProviders = advertisedProviders;
     this.configuredTargetFunction = configuredTargetFunction;
     this.externalBindingsFunction = externalBindingsFunction;
+    this.optionReferenceFunction = optionReferenceFunction;
     this.ruleDefinitionEnvironment = ruleDefinitionEnvironment;
     this.ruleDefinitionEnvironmentHashCode = ruleDefinitionEnvironmentHashCode;
     validateNoClashInPublicNames(attributes);
@@ -1182,8 +1248,8 @@ public class RuleClass {
     return (Configurator<C, R>) configurator;
   }
 
-  public Transition getTransition() {
-    return transition;
+  public RuleTransitionFactory getTransitionFactory() {
+    return transitionFactory;
   }
 
   @SuppressWarnings("unchecked")
@@ -1314,6 +1380,14 @@ public class RuleClass {
    */
   public boolean supportsConstraintChecking() {
     return supportsConstraintChecking;
+  }
+
+  /**
+   * Returns true if rules of this type should be evaluated with the parent's configuration so that
+   * they can match on aspects of it.
+   */
+  public boolean isConfigMatcher() {
+    return isConfigMatcher;
   }
 
   /**
@@ -1871,6 +1945,13 @@ public class RuleClass {
    */
   public Function<? super Rule, Map<String, Label>> getExternalBindingsFunction() {
     return externalBindingsFunction;
+  }
+
+  /**
+   * Returns a function that computes the options referenced by a rule.
+   */
+  public Function<? super Rule, ? extends Set<String>> getOptionReferenceFunction() {
+    return optionReferenceFunction;
   }
 
   /**

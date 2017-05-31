@@ -15,7 +15,9 @@ package com.google.devtools.build.lib.rules.java;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMap.Builder;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
@@ -31,6 +33,7 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.common.options.TriState;
 import java.util.List;
+import java.util.Map;
 import javax.annotation.Nullable;
 
 /** A java compiler configuration containing the flags required for compilation. */
@@ -141,7 +144,10 @@ public final class JavaConfiguration extends Fragment {
   private final TriState bundleTranslations;
   private final ImmutableList<Label> translationTargets;
   private final JavaOptimizationMode javaOptimizationMode;
+  private final ImmutableMap<String, Optional<Label>> bytecodeOptimizers;
   private final Label javaToolchain;
+  private final boolean explicitJavaTestDeps;
+  private final boolean experimentalTestRunner;
 
   // TODO(dmarting): remove once we have a proper solution for #2539
   private final boolean legacyBazelJavaTest;
@@ -173,6 +179,8 @@ public final class JavaConfiguration extends Fragment {
     this.legacyBazelJavaTest = javaOptions.legacyBazelJavaTest;
     this.strictDepsJavaProtos = javaOptions.strictDepsJavaProtos;
     this.enforceOneVersion = javaOptions.enforceOneVersion;
+    this.explicitJavaTestDeps = javaOptions.explicitJavaTestDeps;
+    this.experimentalTestRunner = javaOptions.experimentalTestRunner;
 
     ImmutableList.Builder<Label> translationsBuilder = ImmutableList.builder();
     for (String s : javaOptions.translationTargets) {
@@ -185,6 +193,16 @@ public final class JavaConfiguration extends Fragment {
       }
     }
     this.translationTargets = translationsBuilder.build();
+
+    ImmutableMap.Builder<String, Optional<Label>> optimizersBuilder = ImmutableMap.builder();
+    for (Map.Entry<String, Label> optimizer : javaOptions.bytecodeOptimizers.entrySet()) {
+      String mnemonic = optimizer.getKey();
+      if (optimizer.getValue() == null && !"Proguard".equals(mnemonic)) {
+        throw new InvalidConfigurationException("Must supply label for optimizer " + mnemonic);
+      }
+      optimizersBuilder.put(mnemonic, Optional.fromNullable(optimizer.getValue()));
+    }
+    this.bytecodeOptimizers = optimizersBuilder.build();
   }
 
   @SkylarkCallable(name = "default_javac_flags", structField = true,
@@ -206,6 +224,14 @@ public final class JavaConfiguration extends Fragment {
   @Override
   public void addGlobalMakeVariables(Builder<String, String> globalMakeEnvBuilder) {
     globalMakeEnvBuilder.put("JAVA_TRANSLATIONS", buildTranslations() ? "1" : "0");
+  }
+
+  @Override
+  public boolean compatibleWithStrategy(String strategyName) {
+    if (strategyName.equals("experimental_worker")) {
+      return explicitJavaTestDeps() && useExperimentalTestRunner();
+    }
+    return true;
   }
 
   /**
@@ -327,11 +353,34 @@ public final class JavaConfiguration extends Fragment {
   }
 
   /**
+   * Returns ordered list of optimizers to run.
+   */
+  public ImmutableMap<String, Optional<Label>> getBytecodeOptimizers() {
+    return bytecodeOptimizers;
+  }
+
+  /**
    * Returns true if java_test in Bazel should behave in legacy mode that existed before we
    * open-sourced our test runner.
    */
   public boolean useLegacyBazelJavaTest() {
     return legacyBazelJavaTest;
+  }
+
+  /**
+   * Returns true if we should be the ExperimentalTestRunner instead of the BazelTestRunner for
+   * bazel's java_test runs.
+   */
+  public boolean useExperimentalTestRunner() {
+    return experimentalTestRunner;
+  }
+
+  /**
+   * Make it mandatory for java_test targets to explicitly declare any JUnit or Hamcrest
+   * dependencies instead of accidentally obtaining them from the TestRunner's dependencies.
+   */
+  public boolean explicitJavaTestDeps() {
+    return explicitJavaTestDeps;
   }
 
   /**

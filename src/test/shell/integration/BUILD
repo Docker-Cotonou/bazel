@@ -46,11 +46,18 @@ sh_test(
 )
 
 sh_test(
+    name = "execution_phase_tests",
+    size = "large",
+    srcs = ["execution_phase_tests.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
     name = "experimental_ui_test",
     size = "large",
     srcs = ["experimental_ui_test.sh"],
     data = [":test-deps"],
-    shard_count = 6,
+    shard_count = 11,
 )
 
 sh_test(
@@ -149,21 +156,10 @@ sh_test(
 )
 
 sh_test(
-    name = "ide_info_generation_native",
-    size = "large",
-    srcs = ["ide_info_generation.sh"],
-    args = [
-        "AndroidStudioInfoAspect",
-        "ide-info",
-        "aswb-build",
-        "ide-info-text",
-        "aswb-build.txt",
-        "ide-resolve",
-    ],
-    data = [
-        ":test-deps",
-        "//src/tools/android/java/com/google/devtools/build/android/ideinfo:PackageParser",
-    ],
+    name = "incompatible_changes_conflict_test",
+    size = "small",
+    srcs = ["incompatible_changes_conflict_test.sh"],
+    data = [":test-deps"],
 )
 
 sh_test(
@@ -182,6 +178,13 @@ sh_test(
         ":test-deps",
         "//src/tools/android/java/com/google/devtools/build/android/ideinfo:PackageParser",
     ],
+)
+
+sh_test(
+    name = "skylark_flag_test",
+    size = "small",
+    srcs = ["skylark_flag_test.sh"],
+    data = [":test-deps"],
 )
 
 sh_test(
@@ -260,6 +263,19 @@ sh_test(
     flaky = 1,
     shard_count = 3,
     tags = ["jdk8"],
+)
+
+sh_test(
+    name = "logging_test",
+    size = "medium",
+    srcs = ["logging_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "test_test",
+    srcs = ["test_test.sh"],
+    data = [":test-deps"],
 )
 
 test_suite(

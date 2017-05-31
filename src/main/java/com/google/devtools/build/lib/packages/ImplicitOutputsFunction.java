@@ -94,8 +94,6 @@ public abstract class ImplicitOutputsFunction {
           attrValues.put(attrName, value == null ? Runtime.NONE : value);
         }
       }
-      // Add 'name' explicitly, since its value is not in the attribute map.
-      attrValues.put("name", map.getName());
       ClassObject attrs = NativeClassObjectConstructor.STRUCT.create(
           attrValues,
           "Attribute '%s' either doesn't exist "
@@ -104,10 +102,18 @@ public abstract class ImplicitOutputsFunction {
         ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
         for (Map.Entry<String, String> entry : castMap(callback.call(attrs),
             String.class, String.class, "implicit outputs function return value").entrySet()) {
+
+          // Returns empty string only in case of invalid templates
           Iterable<String> substitutions = fromTemplates(entry.getValue()).getImplicitOutputs(map);
-          if (!Iterables.isEmpty(substitutions)) {
-            builder.put(entry.getKey(), Iterables.getOnlyElement(substitutions));
+          if (Iterables.isEmpty(substitutions)) {
+            throw new EvalException(
+                loc,
+                String.format(
+                    "For attribute '%s' in outputs: %s",
+                    entry.getKey(), "Invalid placeholder(s) in template"));
           }
+
+          builder.put(entry.getKey(), Iterables.getOnlyElement(substitutions));
         }
         return builder.build();
       } catch (IllegalArgumentException e) {
@@ -129,13 +135,22 @@ public abstract class ImplicitOutputsFunction {
     }
 
     @Override
-    public ImmutableMap<String, String> calculateOutputs(AttributeMap map) {
+    public ImmutableMap<String, String> calculateOutputs(AttributeMap map) throws EvalException {
+
       ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
       for (Map.Entry<String, String> entry : outputMap.entrySet()) {
+        // Empty iff invalid placeholders present.
         Iterable<String> substitutions = fromTemplates(entry.getValue()).getImplicitOutputs(map);
-        if (!Iterables.isEmpty(substitutions)) {
-          builder.put(entry.getKey(), Iterables.getOnlyElement(substitutions));
+        if (Iterables.isEmpty(substitutions)) {
+          throw new EvalException(
+              null,
+              String.format(
+                  "For attribute '%s' in outputs: %s",
+                  entry.getKey(), "Invalid placeholder(s) in template"));
+
         }
+
+        builder.put(entry.getKey(), Iterables.getOnlyElement(substitutions));
       }
       return builder.build();
     }
@@ -280,14 +295,11 @@ public abstract class ImplicitOutputsFunction {
    * strings.  Helper function for {@link #fromTemplates(Iterable)}.
    */
   private static Set<String> attributeValues(AttributeMap rule, String attrName) {
-    // Special case "name" since it's not treated as an attribute.
-    if (attrName.equals("name")) {
-      return singleton(rule.getName());
-    } else if (attrName.equals("dirname")) {
-      PathFragment dir = new PathFragment(rule.getName()).getParentDirectory();
+    if (attrName.equals("dirname")) {
+      PathFragment dir = PathFragment.create(rule.getName()).getParentDirectory();
       return (dir.segmentCount() == 0) ? singleton("") : singleton(dir.getPathString() + "/");
     } else if (attrName.equals("basename")) {
-      return singleton(new PathFragment(rule.getName()).getBaseName());
+      return singleton(PathFragment.create(rule.getName()).getBaseName());
     }
 
     Type<?> attrType = rule.getAttributeType(attrName);

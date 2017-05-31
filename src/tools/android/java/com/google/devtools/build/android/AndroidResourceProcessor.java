@@ -22,39 +22,34 @@ import com.android.annotations.Nullable;
 import com.android.builder.core.VariantConfiguration;
 import com.android.builder.core.VariantType;
 import com.android.builder.dependency.SymbolFileProvider;
-import com.android.builder.internal.SymbolLoader;
-import com.android.builder.internal.SymbolWriter;
 import com.android.builder.model.AaptOptions;
 import com.android.ide.common.internal.CommandLineRunner;
 import com.android.ide.common.internal.ExecutorSingleton;
 import com.android.ide.common.internal.LoggedErrorException;
-import com.android.ide.common.res2.MergingException;
 import com.android.io.FileWrapper;
 import com.android.io.StreamException;
 import com.android.repository.Revision;
 import com.android.utils.ILogger;
 import com.android.utils.StdLogger;
+import com.android.utils.StdLogger.Level;
 import com.android.xml.AndroidManifest;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
-import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.android.Converters.ExistingPathConverter;
 import com.google.devtools.build.android.Converters.RevisionConverter;
-import com.google.devtools.build.android.ParsedAndroidData.Builder;
 import com.google.devtools.build.android.SplitConfigurationFilter.UnrecognizedSplitsException;
 import com.google.devtools.build.android.resources.RClassGenerator;
+import com.google.devtools.build.android.resources.ResourceSymbols;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.TriState;
 import java.io.Closeable;
-import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
@@ -64,10 +59,9 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
+import java.util.Map.Entry;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
@@ -96,6 +90,20 @@ public class AndroidResourceProcessor {
         category = "tool",
         help = "Aapt tool location for resource packaging.")
     public Path aapt;
+
+    @Option(name = "featureOf",
+        defaultValue = "null",
+        converter = ExistingPathConverter.class,
+        category = "config",
+        help = "Base apk path.")
+    public Path featureOf;
+
+    @Option(name = "featureAfter",
+        defaultValue = "null",
+        converter = ExistingPathConverter.class,
+        category = "config",
+        help = "Apk path of previous split (if any).")
+    public Path featureAfter;
 
     @Option(name = "annotationJar",
         defaultValue = "null",
@@ -206,8 +214,18 @@ public class AndroidResourceProcessor {
 
     @Override
     public List<String> getAdditionalParameters() {
-      return ImmutableList.of();
+      List<String> params = new java.util.ArrayList<String>();
+      if (options.featureOf != null) {
+         params.add("--feature-of");
+         params.add(options.featureOf.toString());
+      }
+      if (options.featureAfter != null) {
+         params.add("--feature-after");
+         params.add(options.featureAfter.toString());
+      }
+      return ImmutableList.copyOf(params);
     }
+
   }
 
   private final StdLogger stdLogger;
@@ -352,6 +370,9 @@ public class AndroidResourceProcessor {
         .add("-c", Joiner.on(',').join(resourceConfigs))
         // Split APKs if any splits were specified.
         .whenVersionIsAtLeast(new Revision(23)).thenAddRepeated("--split", splits);
+    for (String additional : aaptOptions.getAdditionalParameters()) {
+      commandBuilder.add(additional);
+    }
     try {
       new CommandLineRunner(stdLogger).runCmdLine(commandBuilder.build(), null);
     } catch (LoggedErrorException e) {
@@ -462,43 +483,12 @@ public class AndroidResourceProcessor {
     return processedResourceDir;
   }
 
-  /** Task to parse java package from AndroidManifest.xml */
-  private static final class PackageParsingTask implements Callable<String> {
-
-    private final File manifest;
-
-    PackageParsingTask(File manifest) {
-      this.manifest = manifest;
-    }
-
-    @Override
-    public String call() throws Exception {
-      return VariantConfiguration.getManifestPackage(manifest);
-    }
-  }
-
-  /** Task to load and parse R.txt symbols */
-  private static final class SymbolLoadingTask implements Callable<Object> {
-
-    private final SymbolLoader symbolLoader;
-
-    SymbolLoadingTask(SymbolLoader symbolLoader) {
-      this.symbolLoader = symbolLoader;
-    }
-
-    @Override
-    public Object call() throws Exception {
-      symbolLoader.load();
-      return null;
-    }
-  }
-
-  @Nullable
-  public SymbolLoader loadResourceSymbolTable(
+  public ResourceSymbols loadResourceSymbolTable(
       List<SymbolFileProvider> libraries,
       String appPackageName,
       Path primaryRTxt,
-      Multimap<String, SymbolLoader> libMap) throws IOException {
+      Multimap<String, ResourceSymbols> libMap)
+      throws IOException {
     // The reported availableProcessors may be higher than the actual resources
     // (on a shared system). On the other hand, a lot of the work is I/O, so it's not completely
     // CPU bound. As a compromise, divide by 2 the reported availableProcessors.
@@ -506,56 +496,17 @@ public class AndroidResourceProcessor {
     ListeningExecutorService executorService = MoreExecutors.listeningDecorator(
         Executors.newFixedThreadPool(numThreads));
     try (Closeable closeable = ExecutorServiceCloser.createWith(executorService)) {
-      // Load the package names from the manifest files.
-      Map<SymbolFileProvider, ListenableFuture<String>> packageJobs = new HashMap<>();
-      for (final SymbolFileProvider lib : libraries) {
-        packageJobs.put(lib, executorService.submit(new PackageParsingTask(lib.getManifest())));
+      StdLogger iLogger = new StdLogger(Level.INFO);
+      for (Entry<String, ListenableFuture<ResourceSymbols>> entry :
+          ResourceSymbols.loadFrom(libraries, executorService, iLogger, appPackageName).entries()) {
+        libMap.put(entry.getKey(), entry.getValue().get());
       }
-      Map<SymbolFileProvider, String> packageNames = new HashMap<>();
-      try {
-        for (Map.Entry<SymbolFileProvider, ListenableFuture<String>> entry : packageJobs
-            .entrySet()) {
-          packageNames.put(entry.getKey(), entry.getValue().get());
-        }
-      } catch (InterruptedException | ExecutionException e) {
-        throw new IOException("Failed to load package name: ", e);
+      if (primaryRTxt != null && Files.exists(primaryRTxt)) {
+        return ResourceSymbols.load(primaryRTxt, executorService, iLogger).get();
       }
-      // Associate the packages with symbol files.
-      for (SymbolFileProvider lib : libraries) {
-        String packageName = packageNames.get(lib);
-        // If the library package matches the app package skip -- the final app resource IDs are
-        // stored in the primaryRTxt file.
-        if (appPackageName.equals(packageName)) {
-          continue;
-        }
-        File rFile = lib.getSymbolFile();
-        // If the library has no resource, this file won't exist.
-        if (rFile.isFile()) {
-          SymbolLoader libSymbols = new SymbolLoader(rFile, stdLogger);
-          libMap.put(packageName, libSymbols);
-        }
-      }
-      // Even if there are no libraries, load fullSymbolValues, in case we only have resources
-      // defined for the binary.
-      File primaryRTxtFile = primaryRTxt.toFile();
-      SymbolLoader fullSymbolValues = null;
-      if (primaryRTxtFile.isFile()) {
-        fullSymbolValues = new SymbolLoader(primaryRTxtFile, stdLogger);
-      }
-      // Now load the symbol files in parallel.
-      List<ListenableFuture<?>> loadJobs = new ArrayList<>();
-      Iterable<SymbolLoader> toLoad = fullSymbolValues != null
-          ? Iterables.concat(libMap.values(), ImmutableList.of(fullSymbolValues))
-          : libMap.values();
-      for (final SymbolLoader loader : toLoad) {
-        loadJobs.add(executorService.submit(new SymbolLoadingTask(loader)));
-      }
-      try {
-        Futures.allAsList(loadJobs).get();
-      } catch (InterruptedException | ExecutionException e) {
-        throw new IOException("Failed to load SymbolFile: ", e);
-      }
-      return fullSymbolValues;
+      return ResourceSymbols.merge(libMap.values());
+    } catch (InterruptedException | ExecutionException e) {
+      throw new IOException("Failed to load SymbolFile: ", e);
     }
   }
 
@@ -573,49 +524,36 @@ public class AndroidResourceProcessor {
     if (appPackageName == null) {
       appPackageName = VariantConfiguration.getManifestPackage(androidManifest.toFile());
     }
-    Multimap<String, SymbolLoader> libSymbolMap = ArrayListMultimap.create();
+    Multimap<String, ResourceSymbols> libSymbolMap = ArrayListMultimap.create();
     Path primaryRTxt = sourceOut != null ? sourceOut.resolve("R.txt") : null;
     if (primaryRTxt != null && !libraries.isEmpty()) {
-      SymbolLoader fullSymbolValues = loadResourceSymbolTable(libraries,
-          appPackageName, primaryRTxt, libSymbolMap);
-      if (fullSymbolValues != null) {
-        writePackageRJavaFiles(libSymbolMap, fullSymbolValues, sourceOut);
+      ResourceSymbols fullSymbolValues =
+          loadResourceSymbolTable(libraries, appPackageName, primaryRTxt, libSymbolMap);
+      // Loop on all the package name, merge all the symbols to write, and write.
+      for (String packageName : libSymbolMap.keySet()) {
+        Collection<ResourceSymbols> symbols = libSymbolMap.get(packageName);
+        fullSymbolValues.writeTo(sourceOut, packageName, symbols);
       }
-    }
-  }
-
-  private void writePackageRJavaFiles(
-      Multimap<String, SymbolLoader> libMap,
-      SymbolLoader fullSymbolValues,
-      Path sourceOut) throws IOException {
-    // Loop on all the package name, merge all the symbols to write, and write.
-    for (String packageName : libMap.keySet()) {
-      Collection<SymbolLoader> symbols = libMap.get(packageName);
-      SymbolWriter writer = new SymbolWriter(sourceOut.toString(), packageName, fullSymbolValues);
-      for (SymbolLoader symbolLoader : symbols) {
-        writer.addSymbolsToWrite(symbolLoader);
-      }
-      writer.write();
     }
   }
 
   void writePackageRClasses(
-      Multimap<String, SymbolLoader> libMap,
-      SymbolLoader fullSymbolValues,
-      String appPackageName,
+      Multimap<String, ResourceSymbols> libMap,
+      ResourceSymbols fullSymbolValues,
+      @Nullable String appPackageName,
       Path classesOut,
-      boolean finalFields) throws IOException {
-    for (String packageName : libMap.keySet()) {
-      Collection<SymbolLoader> symbols = libMap.get(packageName);
-      RClassGenerator classWriter = RClassGenerator.fromSymbols(
-          classesOut, packageName, fullSymbolValues, symbols, finalFields);
-      classWriter.write();
+      boolean finalFields)
+      throws IOException {
+    RClassGenerator classWriter =
+        RClassGenerator.fromSymbols(classesOut, fullSymbolValues, finalFields);
+    for (String packageName : libMap.keySet()) { 
+      classWriter.write(packageName, ResourceSymbols.merge(libMap.get(packageName)).asFilterMap());
     }
-    // Unlike the R.java generation, we also write the app's R.class file so that the class
-    // jar file can be complete (aapt doesn't generate it for us).
-    RClassGenerator classWriter = RClassGenerator.fromSymbols(classesOut, appPackageName,
-        fullSymbolValues, ImmutableList.of(fullSymbolValues), finalFields);
-    classWriter.write();
+    if (appPackageName != null) {
+      // Unlike the R.java generation, we also write the app's R.class file so that the class
+      // jar file can be complete (aapt doesn't generate it for us).
+      classWriter.write(appPackageName);
+    }
   }
 
   /** Finds aapt's split outputs and renames them according to the input flags. */
@@ -706,56 +644,5 @@ public class AndroidResourceProcessor {
       return null;
     }
     return Files.createDirectories(out);
-  }
-
-  /** Deserializes a list of serialized resource paths to a {@link ParsedAndroidData}. */
-  public ParsedAndroidData deserializeSymbolsToData(List<Path> symbolPaths)
-      throws IOException, MergingException {
-    AndroidDataDeserializer deserializer = AndroidDataDeserializer.create();
-    final ListeningExecutorService executorService =
-        MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(15));
-    final Builder deserializedDataBuilder = ParsedAndroidData.Builder.newBuilder();
-    try (Closeable closeable = ExecutorServiceCloser.createWith(executorService)) {
-      List<ListenableFuture<Boolean>> deserializing = new ArrayList<>();
-      for (final Path symbolPath : symbolPaths) {
-        deserializing.add(
-            executorService.submit(
-                new Deserialize(deserializer, symbolPath, deserializedDataBuilder)));
-      }
-      FailedFutureAggregator<MergingException> aggregator =
-          FailedFutureAggregator.createForMergingExceptionWithMessage(
-              "Failure(s) during dependency parsing");
-      aggregator.aggregateAndMaybeThrow(deserializing);
-    }
-    return deserializedDataBuilder.build();
-  }
-
-  /** Task to deserialize resources from a path. */
-  private static final class Deserialize implements Callable<Boolean> {
-
-    private final Path symbolPath;
-
-    private final Builder finalDataBuilder;
-    private final AndroidDataDeserializer deserializer;
-
-    private Deserialize(
-        AndroidDataDeserializer deserializer, Path symbolPath, Builder finalDataBuilder) {
-      this.deserializer = deserializer;
-      this.symbolPath = symbolPath;
-      this.finalDataBuilder = finalDataBuilder;
-    }
-
-    @Override
-    public Boolean call() throws Exception {
-      final Builder parsedDataBuilder = ParsedAndroidData.Builder.newBuilder();
-      deserializer.read(symbolPath, parsedDataBuilder.consumers());
-      // The builder isn't threadsafe, so synchronize the copyTo call.
-      synchronized (finalDataBuilder) {
-        // All the resources are sorted before writing, so they can be aggregated in
-        // whatever order here.
-        parsedDataBuilder.copyTo(finalDataBuilder);
-      }
-      return Boolean.TRUE;
-    }
   }
 }

@@ -14,47 +14,135 @@
 
 package com.google.devtools.build.lib.runtime;
 
+import static com.google.devtools.build.lib.events.Event.of;
+import static com.google.devtools.build.lib.events.EventKind.PROGRESS;
+import static com.google.devtools.build.lib.util.Preconditions.checkArgument;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 import com.google.common.eventbus.Subscribe;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionExecutedEvent;
+import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.EventReportingArtifacts;
+import com.google.devtools.build.lib.analysis.BuildInfoEvent;
 import com.google.devtools.build.lib.analysis.NoBuildEvent;
 import com.google.devtools.build.lib.buildeventstream.AbortedEvent;
+import com.google.devtools.build.lib.buildeventstream.AnnounceBuildEventTransportsEvent;
+import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEventId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.Aborted.AbortReason;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.NamedSetOfFilesId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventTransport;
+import com.google.devtools.build.lib.buildeventstream.BuildEventTransportClosedEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEventWithOrderConstraint;
 import com.google.devtools.build.lib.buildeventstream.ProgressEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildInterruptedEvent;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetView;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import java.io.IOException;
+import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.rules.extra.ExtraAction;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
-/** Listen for {@link BuildEvent} and stream them to the provided {@link BuildEventTransport}. */
+/**
+ * Listens for {@link BuildEvent}s and streams them to the provided {@link BuildEventTransport}s.
+ *
+ * <p>The streamer takes care of closing all {@link BuildEventTransport}s. It does so after having
+ * received a {@link BuildCompleteEvent}. Furthermore, it emits two event types to the
+ * {@code eventBus}. After having received the first {@link BuildEvent} it emits a
+ * {@link AnnounceBuildEventTransportsEvent} that contains a list of all its transports.
+ * Furthermore, after a transport has been closed, it emits
+ * a {@link BuildEventTransportClosedEvent}.
+ */
 public class BuildEventStreamer implements EventHandler {
+
   private final Collection<BuildEventTransport> transports;
+  private final Reporter reporter;
   private Set<BuildEventId> announcedEvents;
-  private Set<BuildEventId> postedEvents;
-  private final Multimap<BuildEventId, BuildEvent> pendingEvents;
+  private final Set<BuildEventId> postedEvents = new HashSet<>();
+  private final Multimap<BuildEventId, BuildEvent> pendingEvents = HashMultimap.create();
   private int progressCount;
+  private final CountingArtifactGroupNamer artifactGroupNamer = new CountingArtifactGroupNamer();
+  private OutErrProvider outErrProvider;
   private AbortReason abortReason = AbortReason.UNKNOWN;
   private static final Logger log = Logger.getLogger(BuildEventStreamer.class.getName());
 
-  public BuildEventStreamer(Collection<BuildEventTransport> transports) {
+  interface OutErrProvider {
+    /**
+     * Return the chunk of stdout that was produced since the last call to this function (or the
+     * beginning of the build, for the first call). It is the responsibility of the class
+     * implementing this interface to properly synchronize with simultaneously written output.
+     */
+    String getOut();
+
+    /**
+     * Return the chunk of stderr that was produced since the last call to this function (or the
+     * beginning of the build, for the first call). It is the responsibility of the class
+     * implementing this interface to properly synchronize with simultaneously written output.
+     */
+    String getErr();
+  }
+
+  private static class CountingArtifactGroupNamer implements ArtifactGroupNamer {
+    private final Map<Object, Long> reportedArtifactNames = new HashMap<>();
+    private long nextArtifactName;
+
+    @Override
+    public NamedSetOfFilesId apply(Object id) {
+      Long name;
+      synchronized (this) {
+        name = reportedArtifactNames.get(id);
+      }
+      if (name == null) {
+        return null;
+      }
+      return NamedSetOfFilesId.newBuilder().setId(name.toString()).build();
+    }
+
+    /**
+     * If the {@link NestedSetView} has no name already, return a new name for it. Return null
+     * otherwise.
+     */
+    synchronized String maybeName(NestedSetView<Artifact> view) {
+      if (reportedArtifactNames.containsKey(view.identifier())) {
+        return null;
+      }
+      Long name = nextArtifactName;
+      nextArtifactName++;
+      reportedArtifactNames.put(view.identifier(), name);
+      return name.toString();
+    }
+  }
+
+  public BuildEventStreamer(Collection<BuildEventTransport> transports, Reporter reporter) {
+    checkArgument(transports.size() > 0);
     this.transports = transports;
+    this.reporter = reporter;
     this.announcedEvents = null;
-    this.postedEvents = null;
     this.progressCount = 0;
-    this.pendingEvents = HashMultimap.create();
+  }
+
+  public void registerOutErrProvider(OutErrProvider outErrProvider) {
+    this.outErrProvider = outErrProvider;
   }
 
   /**
@@ -71,35 +159,48 @@ public class BuildEventStreamer implements EventHandler {
     synchronized (this) {
       if (announcedEvents == null) {
         announcedEvents = new HashSet<>();
-        postedEvents = new HashSet<>();
         if (!event.getChildrenEvents().contains(ProgressEvent.INITIAL_PROGRESS_UPDATE)) {
           linkEvent = ProgressEvent.progressChainIn(progressCount, event.getEventId());
           progressCount++;
           announcedEvents.addAll(linkEvent.getChildrenEvents());
           postedEvents.add(linkEvent.getEventId());
         }
+
+        if (reporter != null) {
+          reporter.post(new AnnounceBuildEventTransportsEvent(transports));
+        }
       } else {
         if (!announcedEvents.contains(id)) {
-          linkEvent = ProgressEvent.progressChainIn(progressCount, id);
+          String out = null;
+          String err = null;
+          if (outErrProvider != null) {
+            out = outErrProvider.getOut();
+            err = outErrProvider.getErr();
+          }
+          linkEvent = ProgressEvent.progressChainIn(progressCount, id, out, err);
           progressCount++;
           announcedEvents.addAll(linkEvent.getChildrenEvents());
           postedEvents.add(linkEvent.getEventId());
         }
-        postedEvents.add(id);
       }
+
+      if (event instanceof BuildInfoEvent) {
+        // The specification for BuildInfoEvent says that there may be many such events,
+        // but all except the first one should be ignored.
+        if (postedEvents.contains(id)) {
+          return;
+        }
+      }
+
+      postedEvents.add(id);
       announcedEvents.addAll(event.getChildrenEvents());
     }
 
     for (BuildEventTransport transport : transports) {
-      try {
-        if (linkEvent != null) {
-          transport.sendBuildEvent(linkEvent);
-        }
-        transport.sendBuildEvent(event);
-      } catch (IOException e) {
-        // TODO(aehlig): signal that the build ought to be aborted
-        log.severe("Failed to write to build event transport: " + e);
+      if (linkEvent != null) {
+        transport.sendBuildEvent(linkEvent, artifactGroupNamer);
       }
+      transport.sendBuildEvent(event, artifactGroupNamer);
     }
   }
 
@@ -129,15 +230,73 @@ public class BuildEventStreamer implements EventHandler {
     }
   }
 
+  private ScheduledFuture<?> bepUploadWaitEvent(ScheduledExecutorService executor) {
+    final long startNanos = System.nanoTime();
+    return executor.scheduleAtFixedRate(new Runnable() {
+      @Override
+      public void run() {
+        long deltaNanos = System.nanoTime() - startNanos;
+        long deltaSeconds = TimeUnit.NANOSECONDS.toSeconds(deltaNanos);
+        Event waitEvt =
+            of(PROGRESS, null, "Waiting for build event protocol upload: " + deltaSeconds + "s");
+        if (reporter != null) {
+          reporter.handle(waitEvt);
+        }
+      }
+    }, 0, 1, TimeUnit.SECONDS);
+  }
+
   private void close() {
-    for (BuildEventTransport transport : transports) {
+    ScheduledExecutorService executor = null;
+    try {
+      executor = Executors.newSingleThreadScheduledExecutor();
+      List<ListenableFuture<Void>> closeFutures = new ArrayList<>(transports.size());
+      for (final BuildEventTransport transport : transports) {
+        ListenableFuture<Void> closeFuture = transport.close();
+        closeFuture.addListener(new Runnable() {
+          @Override
+          public void run() {
+            if (reporter != null) {
+              reporter.post(new BuildEventTransportClosedEvent(transport));
+            }
+          }
+        }, executor);
+        closeFutures.add(closeFuture);
+      }
+
       try {
-        transport.close();
-      } catch (IOException e) {
-        // TODO(aehlig): signal that the build ought to be aborted
-        log.warning("Failure while closing build event transport: " + e);
+        if (closeFutures.isEmpty()) {
+          // Don't spam events if there is nothing to close.
+          return;
+        }
+
+        ScheduledFuture<?> f = bepUploadWaitEvent(executor);
+        // Wait for all transports to close.
+        Futures.allAsList(closeFutures).get();
+        f.cancel(true);
+      } catch (Exception e) {
+        log.severe("Failed to close a build event transport: " + e);
+      }
+    } finally {
+      if (executor != null) {
+        executor.shutdown();
       }
     }
+  }
+
+  private void maybeReportArtifactSet(NestedSetView<Artifact> view) {
+    String name = artifactGroupNamer.maybeName(view);
+    if (name == null) {
+      return;
+    }
+    for (NestedSetView<Artifact> transitive : view.transitives()) {
+      maybeReportArtifactSet(transitive);
+    }
+    post(new NamedArtifactGroup(name, view));
+  }
+
+  private void maybeReportArtifactSet(NestedSet<Artifact> set) {
+    maybeReportArtifactSet(new NestedSetView<Artifact>(set));
   }
 
   @Override
@@ -157,6 +316,13 @@ public class BuildEventStreamer implements EventHandler {
   public void buildEvent(BuildEvent event) {
     if (isActionWithoutError(event) || bufferUntilPrerequisitesReceived(event)) {
       return;
+    }
+
+    if (event instanceof EventReportingArtifacts) {
+      for (NestedSet<Artifact> artifactSet :
+          ((EventReportingArtifacts) event).reportedArtifacts()) {
+        maybeReportArtifactSet(artifactSet);
+      }
     }
 
     post(event);
@@ -179,14 +345,25 @@ public class BuildEventStreamer implements EventHandler {
 
   private void buildComplete() {
     clearPendingEvents();
-    post(ProgressEvent.finalProgressUpdate(progressCount));
+    String out = null;
+    String err = null;
+    if (outErrProvider != null) {
+      out = outErrProvider.getOut();
+      err = outErrProvider.getErr();
+    }
+    post(ProgressEvent.finalProgressUpdate(progressCount, out, err));
     clearAnnouncedEvents();
     close();
   }
 
+  /**
+   * Return true, if the action is not worth being reported. This is the case, if the action
+   * executed successfully and is not an ExtraAction.
+   */
   private static boolean isActionWithoutError(BuildEvent event) {
     return event instanceof ActionExecutedEvent
-        && ((ActionExecutedEvent) event).getException() == null;
+        && ((ActionExecutedEvent) event).getException() == null
+        && (!(((ActionExecutedEvent) event).getAction() instanceof ExtraAction));
   }
 
   private boolean bufferUntilPrerequisitesReceived(BuildEvent event) {

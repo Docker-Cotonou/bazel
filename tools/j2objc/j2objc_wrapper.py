@@ -142,17 +142,20 @@ def _ReadDepMapping(input_file_queue, output_dep_mapping_queue,
       return
 
     try:
-      deps = []
-      entry = os.path.relpath(os.path.splitext(input_file)[0], output_root)
-      with file_open(input_file, 'r') as f:
-        for line in f:
-          include = _INCLUDE_RE.match(line)
-          if include:
-            include_path = include.group(2)
-            dep = os.path.splitext(include_path)[0]
-            if dep != entry:
-              deps.append(dep)
-      output_dep_mapping_queue.put((entry, deps))
+      deps = set()
+      input_file_name = os.path.splitext(input_file)[0]
+      entry = os.path.relpath(input_file_name, output_root)
+      for file_ext in ['.m', '.h']:
+        with file_open(input_file_name + file_ext, 'r') as f:
+          for line in f:
+            include = _INCLUDE_RE.match(line)
+            if include:
+              include_path = include.group(2)
+              dep = os.path.splitext(include_path)[0]
+              if dep != entry:
+                deps.add(dep)
+
+      output_dep_mapping_queue.put((entry, sorted(deps)))
     except Exception as e:  # pylint: disable=broad-except
       error_message_queue.put(str(e))
     finally:
@@ -484,6 +487,14 @@ def main():
   # Run J2ObjC over the normal input Java files and unzipped gen jar Java files.
   # The output is stored in a temporary directory.
   tmp_objc_file_root = tempfile.mkdtemp()
+
+  # If we do not generate the header mapping from J2ObjC, we still
+  # need to specify --output-header-mapping, as it signals to J2ObjC that we
+  # are using source paths as import paths, not package paths.
+  # TODO(rduan): Make another flag in J2ObjC to specify using source paths.
+  if '--output-header-mapping' not in j2objc_flags:
+    j2objc_flags.extend(['--output-header-mapping', '/dev/null'])
+
   RunJ2ObjC(args.java,
             args.jvm_flags,
             args.j2objc,

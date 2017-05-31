@@ -77,8 +77,10 @@ import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.AliasProvider;
+import com.google.devtools.build.lib.rules.MakeVariableProvider;
 import com.google.devtools.build.lib.rules.fileset.FilesetProvider;
 import com.google.devtools.build.lib.shell.ShellUtils;
+import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.syntax.Type.LabelClass;
@@ -553,7 +555,7 @@ public final class RuleContext extends TargetContext
    * thus guaranteeing that it never clashes with artifacts created by rules in other packages.
    */
   public Artifact getPackageRelativeArtifact(String relative, Root root) {
-    return getPackageRelativeArtifact(new PathFragment(relative), root);
+    return getPackageRelativeArtifact(PathFragment.create(relative), root);
   }
 
   /**
@@ -561,7 +563,7 @@ public final class RuleContext extends TargetContext
    * guaranteeing that it never clashes with artifacts created by rules in other packages.
    */
   public Artifact getBinArtifact(String relative) {
-    return getBinArtifact(new PathFragment(relative));
+    return getBinArtifact(PathFragment.create(relative));
   }
 
   public Artifact getBinArtifact(PathFragment relative) {
@@ -574,7 +576,7 @@ public final class RuleContext extends TargetContext
    * guaranteeing that it never clashes with artifacts created by rules in other packages.
    */
   public Artifact getGenfilesArtifact(String relative) {
-    return getGenfilesArtifact(new PathFragment(relative));
+    return getGenfilesArtifact(PathFragment.create(relative));
   }
 
   public Artifact getGenfilesArtifact(PathFragment relative) {
@@ -650,12 +652,20 @@ public final class RuleContext extends TargetContext
   }
 
   /**
+   * Creates a tree artifact in a directory that is unique to the package that contains the rule,
+   * thus guaranteeing that it never clashes with artifacts created by rules in other packages.
+   */
+  public Artifact getPackageRelativeTreeArtifact(PathFragment relative, Root root) {
+    return getTreeArtifact(getPackageDirectory().getRelative(relative), root);
+  }
+
+  /**
    * Creates an artifact in a directory that is unique to the rule, thus guaranteeing that it never
    * clashes with artifacts created by other rules.
    */
   public Artifact getUniqueDirectoryArtifact(
       String uniqueDirectory, String relative, Root root) {
-    return getUniqueDirectoryArtifact(uniqueDirectory, new PathFragment(relative), root);
+    return getUniqueDirectoryArtifact(uniqueDirectory, PathFragment.create(relative), root);
   }
 
   /**
@@ -847,9 +857,11 @@ public final class RuleContext extends TargetContext
    * Returns all the declared providers (native and Skylark) for the specified constructor under the
    * specified attribute of this target in the BUILD file.
    */
-  public Iterable<SkylarkClassObject> getPrerequisites(
-      String attributeName, Mode mode, final ClassObjectConstructor.Key skylarkKey) {
-    return AnalysisUtils.getProviders(getPrerequisites(attributeName, mode), skylarkKey);
+  public <T extends SkylarkClassObject> Iterable<T> getPrerequisites(
+      String attributeName, Mode mode,
+      final ClassObjectConstructor.Key skylarkKey,
+      Class<T> result) {
+    return AnalysisUtils.getProviders(getPrerequisites(attributeName, mode), skylarkKey, result);
   }
 
   /**
@@ -1006,6 +1018,30 @@ public final class RuleContext extends TargetContext
     }
   }
 
+  public ImmutableMap<String, String> getMakeVariables(Iterable<String> attributeNames) {
+    // Using an ImmutableBuilder to complain about duplicate keys. This traversal order of
+    // getPrerequisites isn't well-defined, so this makes sure providers don't seceretly stomp on
+    // each other.
+    ImmutableMap.Builder<String, String> makeVariableBuilder = ImmutableMap.builder();
+    ImmutableSet.Builder<MakeVariableProvider> makeVariableProvidersBuilder =
+        ImmutableSet.builder();
+
+    for (String attributeName : attributeNames) {
+      // TODO(b/37567440): Remove this continue statement.
+      if (!attributes().has(attributeName)) {
+        continue;
+      }
+      makeVariableProvidersBuilder.addAll(
+          getPrerequisites(attributeName, Mode.TARGET, MakeVariableProvider.class));
+    }
+
+    for (MakeVariableProvider makeVariableProvider : makeVariableProvidersBuilder.build()) {
+      makeVariableBuilder.putAll(makeVariableProvider.getMakeVariables());
+    }
+
+    return makeVariableBuilder.build();
+  }
+
   /**
    * Return a context that maps Make variable names (string) to values (string).
    *
@@ -1013,8 +1049,8 @@ public final class RuleContext extends TargetContext
    **/
   public ConfigurationMakeVariableContext getConfigurationMakeVariableContext() {
     if (configurationMakeVariableContext == null) {
-      configurationMakeVariableContext = new ConfigurationMakeVariableContext(
-          getRule().getPackage(), getConfiguration());
+      configurationMakeVariableContext =
+          new ConfigurationMakeVariableContext(this, getRule().getPackage(), getConfiguration());
     }
     return configurationMakeVariableContext;
   }
@@ -1077,8 +1113,8 @@ public final class RuleContext extends TargetContext
    */
   public String expandSingleMakeVariable(String attrName, String expression) {
     try {
-      return MakeVariableExpander.expandSingleVariable(expression,
-          new ConfigurationMakeVariableContext(getRule().getPackage(), getConfiguration()));
+      return MakeVariableExpander.expandSingleVariable(
+          expression, getConfigurationMakeVariableContext());
     } catch (MakeVariableExpander.ExpansionException e) {
       attributeError(attrName, e.getMessage());
       return expression;
@@ -1226,7 +1262,18 @@ public final class RuleContext extends TargetContext
    * <p>For example "pkg/dir/name" -> "pkg/&lt;fragment>/rule/dir/name.
    */
   public final PathFragment getUniqueDirectory(String fragment) {
-    return AnalysisUtils.getUniqueDirectory(getLabel(), new PathFragment(fragment));
+    return getUniqueDirectory(PathFragment.create(fragment));
+  }
+
+  /**
+   * Returns a path fragment qualified by the rule name and unique fragment to
+   * disambiguate artifacts produced from the source file appearing in
+   * multiple rules.
+   *
+   * <p>For example "pkg/dir/name" -> "pkg/&lt;fragment>/rule/dir/name.
+   */
+  public final PathFragment getUniqueDirectory(PathFragment fragment) {
+    return AnalysisUtils.getUniqueDirectory(getLabel(), fragment);
   }
 
   /**
@@ -1818,7 +1865,11 @@ public final class RuleContext extends TargetContext
       for (ImmutableSet<SkylarkProviderIdentifier> providers : mandatoryProvidersList) {
         List<String> missing = new ArrayList<>();
         for (SkylarkProviderIdentifier provider : providers) {
-          if (prerequisite.get(provider) == null) {
+          // A rule may require a built-in provider that is always implicitly provided, e.g. "files"
+          ImmutableSet<String> availableKeys =
+              ImmutableSet.copyOf(((ClassObject) prerequisite).getKeys());
+          if ((prerequisite.get(provider) == null)
+              && !(provider.isLegacy() && availableKeys.contains(provider.getLegacyId()))) {
             missing.add(provider.toString());
           }
         }

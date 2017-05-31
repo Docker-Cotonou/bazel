@@ -54,9 +54,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <string>
+
 static int global_child_pid;
-static char global_inaccessible_directory[] = "tmp/empty.XXXXXX";
-static char global_inaccessible_file[] = "tmp/empty.XXXXXX";
 
 static void SetupSelfDestruction(int *sync_pipe) {
   // We could also poll() on the pipe fd to find out when the parent goes away,
@@ -89,10 +89,10 @@ static void SetupMountNamespace() {
   }
 }
 
-static void WriteFile(const char *filename, const char *fmt, ...) {
-  FILE *stream = fopen(filename, "w");
+static void WriteFile(const std::string &filename, const char *fmt, ...) {
+  FILE *stream = fopen(filename.c_str(), "w");
   if (stream == NULL) {
-    DIE("fopen(%s)", filename);
+    DIE("fopen(%s)", filename.c_str());
   }
 
   va_list ap;
@@ -105,7 +105,7 @@ static void WriteFile(const char *filename, const char *fmt, ...) {
   }
 
   if (fclose(stream) != 0) {
-    DIE("fclose(%s)", filename);
+    DIE("fclose(%s)", filename.c_str());
   }
 }
 
@@ -122,8 +122,13 @@ static void SetupUserNamespace() {
     }
   }
 
-  int inner_uid = 0, inner_gid = 0;
-  if (!opt.fake_root) {
+  int inner_uid, inner_gid;
+  if (opt.fake_root) {
+    // Change our username to 'root'.
+    inner_uid = 0;
+    inner_gid = 0;
+  } else if (opt.fake_username) {
+    // Change our username to 'nobody'.
     struct passwd *pwd = getpwnam("nobody");
     if (pwd == NULL) {
       DIE("unable to find passwd entry for user nobody")
@@ -131,6 +136,10 @@ static void SetupUserNamespace() {
 
     inner_uid = pwd->pw_uid;
     inner_gid = pwd->pw_gid;
+  } else {
+    // Do not change the username inside the sandbox.
+    inner_uid = global_outer_uid;
+    inner_gid = global_outer_gid;
   }
 
   WriteFile("/proc/self/uid_map", "%d %d 1\n", inner_uid, global_outer_uid);
@@ -147,181 +156,64 @@ static void SetupUtsNamespace() {
   }
 }
 
-static void SetupHelperFiles() {
-  if (mkdtemp(global_inaccessible_directory) == NULL) {
-    DIE("mkdtemp(%s)", global_inaccessible_directory);
-  }
-  if (chmod(global_inaccessible_directory, 0) < 0) {
-    DIE("chmod(%s, 0)", global_inaccessible_directory);
-  }
-
-  int handle = mkstemp(global_inaccessible_file);
-  if (handle < 0) {
-    DIE("mkstemp(%s)", global_inaccessible_file);
-  }
-  if (fchmod(handle, 0)) {
-    DIE("fchmod(%s, 0)", global_inaccessible_file);
-  }
-  if (close(handle) < 0) {
-    DIE("close(%s)", global_inaccessible_file);
-  }
-}
-
-// Recursively creates the file or directory specified in "path" and its parent
-// directories.
-static int CreateTarget(const char *path, bool is_directory) {
-  PRINT_DEBUG("CreateTarget(%s, %s)", path, is_directory ? "true" : "false");
-  if (path == NULL) {
-    errno = EINVAL;
-    return -1;
-  }
-
-  struct stat sb;
-  // If the path already exists...
-  if (stat(path, &sb) == 0) {
-    if (is_directory && S_ISDIR(sb.st_mode)) {
-      // and it's a directory and supposed to be a directory, we're done here.
-      return 0;
-    } else if (!is_directory && S_ISREG(sb.st_mode)) {
-      // and it's a regular file and supposed to be one, we're done here.
-      return 0;
-    } else {
-      // otherwise something is really wrong.
-      errno = is_directory ? ENOTDIR : EEXIST;
-      return -1;
-    }
-  } else {
-    // If stat failed because of any error other than "the path does not exist",
-    // this is an error.
-    if (errno != ENOENT) {
-      return -1;
-    }
-  }
-
-  // Create the parent directory.
-  if (CreateTarget(dirname(strdupa(path)), true) < 0) {
-    DIE("CreateTarget(%s, true)", dirname(strdupa(path)));
-  }
-
-  if (is_directory) {
-    if (mkdir(path, 0755) < 0) {
-      DIE("mkdir(%s, 0755)", path);
-    }
-  } else {
-    int handle;
-    if ((handle = open(path, O_CREAT | O_WRONLY | O_EXCL, 0666)) < 0) {
-      DIE("open(%s, O_CREAT | O_WRONLY | O_EXCL, 0666)", path);
-    }
-    if (close(handle) < 0) {
-      DIE("close(%d)", handle);
-    }
-  }
-
-  return 0;
-}
-
 static void MountFilesystems() {
-  if (mount("/", opt.sandbox_root_dir, NULL, MS_BIND | MS_REC, NULL) < 0) {
-    DIE("mount(/, %s, NULL, MS_BIND | MS_REC, NULL)", opt.sandbox_root_dir);
-  }
-
-  if (chdir(opt.sandbox_root_dir) < 0) {
-    DIE("chdir(%s)", opt.sandbox_root_dir);
-  }
-
-  for (const char *tmpfs_dir : opt.tmpfs_dirs) {
-    PRINT_DEBUG("tmpfs: %s", tmpfs_dir);
-    if (mount("tmpfs", tmpfs_dir + 1, "tmpfs",
+  for (const std::string &tmpfs_dir : opt.tmpfs_dirs) {
+    PRINT_DEBUG("tmpfs: %s", tmpfs_dir.c_str());
+    if (mount("tmpfs", tmpfs_dir.c_str(), "tmpfs",
               MS_NOSUID | MS_NODEV | MS_NOATIME, NULL) < 0) {
       DIE("mount(tmpfs, %s, tmpfs, MS_NOSUID | MS_NODEV | MS_NOATIME, NULL)",
-          tmpfs_dir + 1);
+          tmpfs_dir.c_str());
     }
   }
 
   // Make sure that our working directory is a mount point. The easiest way to
   // do this is by bind-mounting it upon itself.
-  PRINT_DEBUG("working dir: %s", opt.working_dir);
-  PRINT_DEBUG("sandbox root: %s", opt.sandbox_root_dir);
+  PRINT_DEBUG("working dir: %s", opt.working_dir.c_str());
 
-  CreateTarget(opt.working_dir + 1, true);
-  if (mount(opt.working_dir, opt.working_dir + 1, NULL, MS_BIND, NULL) < 0) {
-    DIE("mount(%s, %s, NULL, MS_BIND, NULL)", opt.working_dir,
-        opt.working_dir + 1);
+  if (mount(opt.working_dir.c_str(), opt.working_dir.c_str(), NULL, MS_BIND,
+            NULL) < 0) {
+    DIE("mount(%s, %s, NULL, MS_BIND, NULL)", opt.working_dir.c_str(),
+        opt.working_dir.c_str());
   }
 
   for (size_t i = 0; i < opt.bind_mount_sources.size(); i++) {
-    const char *source = opt.bind_mount_sources.at(i);
-    const char *target = opt.bind_mount_targets.at(i);
-    PRINT_DEBUG("bind mount: %s -> %s", source, target);
-    if (mount(source, target + 1, NULL, MS_BIND, NULL) < 0) {
-      DIE("mount(%s, %s, NULL, MS_BIND, NULL)", source, target + 1);
+    std::string source = opt.bind_mount_sources.at(i);
+    std::string target = opt.bind_mount_targets.at(i);
+    PRINT_DEBUG("bind mount: %s -> %s", source.c_str(), target.c_str());
+    if (mount(source.c_str(), target.c_str(), NULL, MS_BIND, NULL) < 0) {
+      DIE("mount(%s, %s, NULL, MS_BIND, NULL)", source.c_str(), target.c_str());
     }
   }
 
-  for (const char *writable_file : opt.writable_files) {
-    PRINT_DEBUG("writable: %s", writable_file);
-    if (mount(writable_file, writable_file + 1, NULL, MS_BIND, NULL) < 0) {
-      DIE("mount(%s, %s, NULL, MS_BIND, NULL)", writable_file,
-          writable_file + 1);
-    }
-  }
-
-  SetupHelperFiles();
-
-  for (const char *inaccessible_file : opt.inaccessible_files) {
-    struct stat sb;
-    if (stat(inaccessible_file, &sb) < 0) {
-      DIE("stat(%s)", inaccessible_file);
-    }
-
-    if (S_ISDIR(sb.st_mode)) {
-      PRINT_DEBUG("inaccessible dir: %s", inaccessible_file);
-      if (mount(global_inaccessible_directory, inaccessible_file + 1, NULL,
-                MS_BIND, NULL) < 0) {
-        DIE("mount(%s, %s, NULL, MS_BIND, NULL)", global_inaccessible_directory,
-            inaccessible_file + 1);
-      }
-    } else {
-      PRINT_DEBUG("inaccessible file: %s", inaccessible_file);
-      if (mount(global_inaccessible_file, inaccessible_file + 1, NULL, MS_BIND,
-                NULL) < 0) {
-        DIE("mount(%s, %s, NULL, MS_BIND, NULL", global_inaccessible_file,
-            inaccessible_file + 1);
-      }
+  for (const std::string &writable_file : opt.writable_files) {
+    PRINT_DEBUG("writable: %s", writable_file.c_str());
+    if (mount(writable_file.c_str(), writable_file.c_str(), NULL, MS_BIND,
+              NULL) < 0) {
+      DIE("mount(%s, %s, NULL, MS_BIND, NULL)", writable_file.c_str(),
+          writable_file.c_str());
     }
   }
 }
 
 // We later remount everything read-only, except the paths for which this method
 // returns true.
-static bool ShouldBeWritable(char *mnt_dir) {
-  mnt_dir += strlen(opt.sandbox_root_dir);
-
-  if (strcmp(mnt_dir, opt.working_dir) == 0) {
+static bool ShouldBeWritable(const std::string &mnt_dir) {
+  if (mnt_dir == opt.working_dir) {
     return true;
   }
 
-  for (const char *writable_file : opt.writable_files) {
-    if (strcmp(mnt_dir, writable_file) == 0) {
+  for (const std::string &writable_file : opt.writable_files) {
+    if (mnt_dir == writable_file) {
       return true;
     }
   }
 
-  for (const char *tmpfs_dir : opt.tmpfs_dirs) {
-    if (strcmp(mnt_dir, tmpfs_dir) == 0) {
+  for (const std::string &tmpfs_dir : opt.tmpfs_dirs) {
+    if (mnt_dir == tmpfs_dir) {
       return true;
     }
   }
 
-  return false;
-}
-
-static bool IsUnderTmpDir(const char *mnt_dir) {
-  for (const char *tmpfs_dir : opt.tmpfs_dirs) {
-    if (strstr(mnt_dir, tmpfs_dir) == mnt_dir) {
-      return true;
-    }
-  }
   return false;
 }
 
@@ -335,17 +227,6 @@ static void MakeFilesystemMostlyReadOnly() {
 
   struct mntent *ent;
   while ((ent = getmntent(mounts)) != NULL) {
-    // Skip mounts that do not belong to our sandbox.
-    if (strstr(ent->mnt_dir, opt.sandbox_root_dir) != ent->mnt_dir) {
-      continue;
-    }
-    // Skip mounts that are under tmpfs directories because we've already
-    // replaced such directories with new tmpfs instances.
-    // mount() would fail with ENOENT if we tried to remount such mount points.
-    if (IsUnderTmpDir(ent->mnt_dir + strlen(opt.sandbox_root_dir))) {
-      continue;
-    }
-
     int mountFlags = MS_BIND | MS_REMOUNT;
 
     // MS_REMOUNT does not allow us to change certain flags. This means, we have
@@ -380,17 +261,17 @@ static void MakeFilesystemMostlyReadOnly() {
     if (mount(NULL, ent->mnt_dir, NULL, mountFlags, NULL) < 0) {
       // If we get EACCES or EPERM, this might be a mount-point for which we
       // don't have read access. Not much we can do about this, but it also
-      // won't do any harm, so let's go on. The same goes for EINVAL, which is
-      // fired in case a later mount overlaps an earlier mount, e.g. consider
-      // the case of /proc, /proc/sys/fs/binfmt_misc and /proc, with the latter
-      // /proc being the one that an outer sandbox has mounted on top of its
-      // parent /proc. In that case, we're not allowed to remount
+      // won't do any harm, so let's go on. The same goes for EINVAL or ENOENT,
+      // which are fired in case a later mount overlaps an earlier mount, e.g.
+      // consider the case of /proc, /proc/sys/fs/binfmt_misc and /proc, with
+      // the latter /proc being the one that an outer sandbox has mounted on
+      // top of its parent /proc. In that case, we're not allowed to remount
       // /proc/sys/fs/binfmt_misc, because it is hidden. If we get ESTALE, the
       // mount is a broken NFS mount. In the ideal case, the user would either
       // fix or remove that mount, but in cases where that's not possible, we
       // should just ignore it.
-      if (errno != EACCES && errno != EINVAL && errno != ESTALE &&
-          errno != EPERM) {
+      if (errno != EACCES && errno != EPERM && errno != EINVAL &&
+          errno != ENOENT && errno != ESTALE) {
         DIE("remount(NULL, %s, NULL, %d, NULL)", ent->mnt_dir, mountFlags);
       }
     }
@@ -402,7 +283,7 @@ static void MakeFilesystemMostlyReadOnly() {
 static void MountProc() {
   // Mount a new proc on top of the old one, because the old one still refers to
   // our parent PID namespace.
-  if (mount("proc", "proc", "proc", MS_NODEV | MS_NOEXEC | MS_NOSUID, NULL) <
+  if (mount("/proc", "/proc", "proc", MS_NODEV | MS_NOEXEC | MS_NOSUID, NULL) <
       0) {
     DIE("mount");
   }
@@ -440,31 +321,8 @@ static void SetupNetworking() {
 }
 
 static void EnterSandbox() {
-  // Move the real root to old_root, then detach it.
-  char old_root[] = "tmp/old-root-XXXXXX";
-  if (mkdtemp(old_root) == NULL) {
-    DIE("mkdtemp(%s)", old_root);
-  }
-
-  // pivot_root has no wrapper in libc, so we need syscall()
-  if (syscall(SYS_pivot_root, ".", old_root) < 0) {
-    DIE("pivot_root(., %s)", old_root);
-  }
-
-  if (chroot(".") < 0) {
-    DIE("chroot(.)");
-  }
-
-  if (umount2(old_root, MNT_DETACH) < 0) {
-    DIE("umount2(%s, MNT_DETACH)", old_root);
-  }
-
-  if (rmdir(old_root) < 0) {
-    DIE("rmdir(%s)", old_root);
-  }
-
-  if (chdir(opt.working_dir) < 0) {
-    DIE("chdir(%s)", opt.working_dir);
+  if (chdir(opt.working_dir.c_str()) < 0) {
+    DIE("chdir(%s)", opt.working_dir.c_str());
   }
 }
 

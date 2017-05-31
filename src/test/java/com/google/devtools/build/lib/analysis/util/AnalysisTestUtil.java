@@ -46,6 +46,7 @@ import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollectio
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
+import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -147,13 +148,18 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Iterable<ActionAnalysisMetadata> getRegisteredActions() {
+    public List<ActionAnalysisMetadata> getRegisteredActions() {
       return original.getRegisteredActions();
     }
 
     @Override
     public SkyFunction.Environment getSkyframeEnv() {
       return null;
+    }
+
+    @Override
+    public SkylarkSemanticsOptions getSkylarkSemantics() throws InterruptedException {
+      return original.getSkylarkSemantics();
     }
 
     @Override
@@ -277,10 +283,10 @@ public final class AnalysisTestUtil {
         ArtifactFactory artifactFactory, ArtifactOwner artifactOwner, Supplier<UUID> buildId,
         String workspaceName) {
       Artifact stableStatus = artifactFactory.getDerivedArtifact(
-          new PathFragment("build-info.txt"),
+          PathFragment.create("build-info.txt"),
           directories.getBuildDataDirectory(workspaceName), artifactOwner);
       Artifact volatileStatus = artifactFactory.getConstantMetadataArtifact(
-          new PathFragment("build-changelist.txt"),
+          PathFragment.create("build-changelist.txt"),
           directories.getBuildDataDirectory(workspaceName), artifactOwner);
       return new DummyWorkspaceStatusAction(key, stableStatus, volatileStatus);
     }
@@ -329,12 +335,17 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public Iterable<ActionAnalysisMetadata> getRegisteredActions() {
+    public List<ActionAnalysisMetadata> getRegisteredActions() {
       return ImmutableList.of();
     }
 
     @Override
     public SkyFunction.Environment getSkyframeEnv() {
+      return null;
+    }
+
+    @Override
+    public SkylarkSemanticsOptions getSkylarkSemantics() throws InterruptedException {
       return null;
     }
 

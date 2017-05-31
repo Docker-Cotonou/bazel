@@ -14,73 +14,50 @@
 
 package com.google.devtools.build.benchmark.codegenerator;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 /** Create 4 types of Java project, or modify existing ones. */
-public class JavaCodeGenerator {
+public class JavaCodeGenerator extends CodeGenerator {
 
-  @VisibleForTesting static final String TARGET_A_FEW_FILES = "AFewFiles";
-  @VisibleForTesting static final int SIZE_A_FEW_FILES = 10;
+  private static final int SIZE_A_FEW_FILES = 10;
+  private static final int SIZE_MANY_FILES = 1000;
+  private static final int SIZE_LONG_CHAINED_DEPS = 20;
+  private static final int SIZE_PARALLEL_DEPS = 20;
 
-  @VisibleForTesting static final String TARGET_MANY_FILES = "ManyFiles";
-  @VisibleForTesting static final int SIZE_MANY_FILES = 1000;
+  private static final String DIR_SUFFIX = "/java";
 
-  @VisibleForTesting static final String TARGET_LONG_CHAINED_DEPS = "LongChainedDeps";
-  @VisibleForTesting static final int SIZE_LONG_CHAINED_DEPS = 20;
-
-  @VisibleForTesting static final String TARGET_PARALLEL_DEPS = "ParallelDeps";
-  @VisibleForTesting static final int SIZE_PARALLEL_DEPS = 20;
-
-  public static void generateNewProject(
-      String outputDir,
-      boolean aFewFiles,
-      boolean manyFiles,
-      boolean longChainedDeps,
-      boolean parallelDeps) {
-    Path dir = Paths.get(outputDir);
-    if (aFewFiles) {
-      createTargetWithSomeFiles(dir.resolve(TARGET_A_FEW_FILES), SIZE_A_FEW_FILES);
-    }
-    if (manyFiles) {
-      createTargetWithSomeFiles(dir.resolve(TARGET_MANY_FILES), SIZE_MANY_FILES);
-    }
-    if (longChainedDeps) {
-      createTargetWithLongChainedDeps(dir.resolve(TARGET_LONG_CHAINED_DEPS));
-    }
-    if (parallelDeps) {
-      createTargetWithParallelDeps(dir.resolve(TARGET_PARALLEL_DEPS));
-    }
+  @Override
+  public String getDirSuffix() {
+    return DIR_SUFFIX;
   }
 
-  public static void modifyExistingProject(
-      String outputDir,
-      boolean aFewFiles,
-      boolean manyFiles,
-      boolean longChainedDeps,
-      boolean parallelDeps) {
-    Path dir = Paths.get(outputDir);
-    if (aFewFiles) {
-      modifyTargetWithSomeFiles(dir.resolve(TARGET_A_FEW_FILES));
-    }
-    if (manyFiles) {
-      modifyTargetWithSomeFiles(dir.resolve(TARGET_MANY_FILES));
-    }
-    if (longChainedDeps) {
-      modifyTargetWithLongChainedDeps(dir.resolve(TARGET_LONG_CHAINED_DEPS));
-    }
-    if (parallelDeps) {
-      modifyTargetWithParallelDeps(dir.resolve(TARGET_PARALLEL_DEPS));
-    }
+  @Override
+  public int getSizeAFewFiles() {
+    return SIZE_A_FEW_FILES;
   }
+
+  @Override
+  public int getSizeManyFiles() {
+    return SIZE_MANY_FILES;
+  }
+
+  @Override
+  public int getSizeLongChainedDeps() {
+    return SIZE_LONG_CHAINED_DEPS;
+  }
+
+  @Override
+  public int getSizeParallelDeps() {
+    return SIZE_PARALLEL_DEPS;
+  }
+
 
   /** Target type 1/2: Create targets with some files */
-  private static void createTargetWithSomeFiles(Path projectPath, int numberOfFiles) {
+  @Override
+  void createTargetWithSomeFiles(Path projectPath, int numberOfFiles) {
     if (pathExists(projectPath)) {
       return;
     }
@@ -101,9 +78,10 @@ public class JavaCodeGenerator {
   }
 
   /** Target type 1/2: Modify targets with some files */
-  private static void modifyTargetWithSomeFiles(Path projectPath) {
+  @Override
+  void modifyTargetWithSomeFiles(Path projectPath) {
     File dir = projectPath.toFile();
-    if (directoryExists(dir)) {
+    if (directoryNotExists(dir)) {
       System.err.format(
           "Project dir (%s) does not contain code for modification.\n", projectPath.toString());
       return;
@@ -117,7 +95,8 @@ public class JavaCodeGenerator {
   }
 
   /** Target type 3: Create targets with a few long chained dependencies (A -> B -> C -> … -> Z) */
-  private static void createTargetWithLongChainedDeps(Path projectPath) {
+  @Override
+  void createTargetWithLongChainedDeps(Path projectPath) {
     if (pathExists(projectPath)) {
       return;
     }
@@ -148,9 +127,10 @@ public class JavaCodeGenerator {
   }
 
   /** Target type 3: Modify targets with a few long chained dependencies (A -> B -> C -> … -> Z) */
-  private static void modifyTargetWithLongChainedDeps(Path projectPath) {
+  @Override
+  void modifyTargetWithLongChainedDeps(Path projectPath) {
     File dir = projectPath.toFile();
-    if (directoryExists(dir)) {
+    if (directoryNotExists(dir)) {
       System.err.format(
           "Project dir (%s) does not contain code for modification.\n", projectPath.toString());
       return;
@@ -165,7 +145,8 @@ public class JavaCodeGenerator {
   }
 
   /** Target type 4: Create targets with lots of parallel dependencies (A -> B, C, D, E, F, G, H) */
-  private static void createTargetWithParallelDeps(Path projectPath) {
+  @Override
+  void createTargetWithParallelDeps(Path projectPath) {
     if (pathExists(projectPath)) {
       return;
     }
@@ -198,9 +179,10 @@ public class JavaCodeGenerator {
   }
 
   /** Target type 4: Modify targets with lots of parallel dependencies (A -> B, C, D, E, F, G, H) */
-  private static void modifyTargetWithParallelDeps(Path projectPath) {
+  @Override
+  void modifyTargetWithParallelDeps(Path projectPath) {
     File dir = projectPath.toFile();
-    if (directoryExists(dir)) {
+    if (directoryNotExists(dir)) {
       System.err.format(
           "Project dir (%s) does not contain code for modification.\n", projectPath.toString());
       return;
@@ -224,7 +206,7 @@ public class JavaCodeGenerator {
     return false;
   }
 
-  private static boolean directoryExists(File file) {
+  private static boolean directoryNotExists(File file) {
     return !(file.exists() && file.isDirectory());
   }
 }

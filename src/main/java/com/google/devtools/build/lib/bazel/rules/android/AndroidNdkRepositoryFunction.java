@@ -61,9 +61,9 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
 
   private static final String TOOLCHAIN_NAME_PREFIX = "toolchain-";
   private static final String PATH_ENV_VAR = "ANDROID_NDK_HOME";
-  private static final PathFragment PLATFORMS_DIR = new PathFragment("platforms");
+  private static final PathFragment PLATFORMS_DIR = PathFragment.create("platforms");
 
-  private static final Iterable<String> PATH_ENV_VAR_AS_LIST = ImmutableList.of(PATH_ENV_VAR);
+  private static final ImmutableList<String> PATH_ENV_VAR_AS_LIST = ImmutableList.of(PATH_ENV_VAR);
 
   private static final class CrosstoolStlPair {
 
@@ -229,7 +229,7 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
 
   private static PathFragment getAndroidNdkHomeEnvironmentVar(
       Path workspace, Map<String, String> env) {
-    return workspace.getRelative(new PathFragment(env.get(PATH_ENV_VAR))).asFragment();
+    return workspace.getRelative(PathFragment.create(env.get(PATH_ENV_VAR))).asFragment();
   }
 
   private static String createBuildFile(String ruleName, List<CrosstoolStlPair> crosstools) {
@@ -238,6 +238,7 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
     String ccToolchainSuiteTemplate = getTemplate("android_ndk_cc_toolchain_suite_template.txt");
     String ccToolchainTemplate = getTemplate("android_ndk_cc_toolchain_template.txt");
     String stlFilegroupTemplate = getTemplate("android_ndk_stl_filegroup_template.txt");
+    String miscLibrariesTemplate = getTemplate("android_ndk_misc_libraries_template.txt");
 
     StringBuilder ccToolchainSuites = new StringBuilder();
     StringBuilder ccToolchainRules = new StringBuilder();
@@ -281,7 +282,8 @@ public class AndroidNdkRepositoryFunction extends RepositoryFunction {
         .replace("%ruleName%", ruleName)
         .replace("%ccToolchainSuites%", ccToolchainSuites)
         .replace("%ccToolchainRules%", ccToolchainRules)
-        .replace("%stlFilegroups%", stlFilegroups);
+        .replace("%stlFilegroups%", stlFilegroups)
+        .replace("%miscLibraries%", miscLibrariesTemplate);
   }
 
   static String createToolchainName(String stlName) {

@@ -66,8 +66,6 @@ static void Usage(char *program_name, const char *fmt, ...) {
           "  -L <file>  redirect stderr to a file\n"
           "  -w <file>  make a file or directory writable for the sandboxed "
           "process\n"
-          "  -i <file>  make a file or directory inaccessible for the "
-          "sandboxed process\n"
           "  -e <dir>  mount an empty tmpfs on a directory\n"
           "  -M/-m <source/target>  directory to mount inside the sandbox\n"
           "    Multiple directories can be specified and each of them will be "
@@ -75,39 +73,12 @@ static void Usage(char *program_name, const char *fmt, ...) {
           "    The -M option specifies which directory to mount, the -m option "
           "specifies where to\n"
           "  -N  if set, a new network namespace will be created\n"
-          "  -R  if set, make the uid/gid be root, otherwise use nobody\n"
+          "  -R  if set, make the uid/gid be root\n"
+          "  -U  if set, make the uid/gid be nobody\n"
           "  -D  if set, debug info will be printed\n"
           "  @FILE  read newline-separated arguments from FILE\n"
           "  --  command to run inside sandbox, followed by arguments\n");
   exit(EXIT_FAILURE);
-}
-
-// Child function used by CheckNamespacesSupported() in call to clone().
-static int CheckNamespacesSupportedChild(void *arg) { return 0; }
-
-// Check whether the required namespaces are supported.
-static int CheckNamespacesSupported() {
-  const int kStackSize = 1024 * 1024;
-  vector<char> child_stack(kStackSize);
-
-  pid_t pid = clone(CheckNamespacesSupportedChild, &child_stack.back(),
-                    CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |
-                        CLONE_NEWNET | CLONE_NEWPID | SIGCHLD,
-                    NULL);
-  if (pid < 0) {
-    DIE("pid");
-  }
-
-  int err;
-  do {
-    err = waitpid(pid, NULL, 0);
-  } while (err < 0 && errno == EINTR);
-
-  if (err < 0) {
-    DIE("waitpid");
-  }
-
-  return EXIT_SUCCESS;
 }
 
 static void ValidateIsAbsolutePath(char *path, char *program_name, char flag) {
@@ -125,27 +96,14 @@ static void ParseCommandLine(unique_ptr<vector<char *>> args) {
   int c;
   bool source_specified;
 
-  while ((c = getopt(args->size(), args->data(),
-                     ":CS:W:T:t:l:L:w:i:e:M:m:HNRD")) != -1) {
+  while ((c = getopt(args->size(), args->data(), ":W:T:t:l:L:w:e:M:m:HNRUD")) !=
+         -1) {
     if (c != 'M' && c != 'm') source_specified = false;
     switch (c) {
-      case 'C':
-        // Shortcut for the "does this system support sandboxing" check.
-        exit(CheckNamespacesSupported());
-        break;
-      case 'S':
-        if (opt.sandbox_root_dir == NULL) {
-          ValidateIsAbsolutePath(optarg, args->front(), static_cast<char>(c));
-          opt.sandbox_root_dir = strdup(optarg);
-        } else {
-          Usage(args->front(),
-                "Multiple root directories (-S) specified, expected one.");
-        }
-        break;
       case 'W':
-        if (opt.working_dir == NULL) {
+        if (opt.working_dir.empty()) {
           ValidateIsAbsolutePath(optarg, args->front(), static_cast<char>(c));
-          opt.working_dir = strdup(optarg);
+          opt.working_dir.assign(optarg);
         } else {
           Usage(args->front(),
                 "Multiple working directories (-W) specified, expected one.");
@@ -164,16 +122,16 @@ static void ParseCommandLine(unique_ptr<vector<char *>> args) {
         }
         break;
       case 'l':
-        if (opt.stdout_path == NULL) {
-          opt.stdout_path = optarg;
+        if (opt.stdout_path.empty()) {
+          opt.stdout_path.assign(optarg);
         } else {
           Usage(args->front(),
                 "Cannot redirect stdout to more than one destination.");
         }
         break;
       case 'L':
-        if (opt.stderr_path == NULL) {
-          opt.stderr_path = optarg;
+        if (opt.stderr_path.empty()) {
+          opt.stderr_path.assign(optarg);
         } else {
           Usage(args->front(),
                 "Cannot redirect stderr to more than one destination.");
@@ -181,21 +139,17 @@ static void ParseCommandLine(unique_ptr<vector<char *>> args) {
         break;
       case 'w':
         ValidateIsAbsolutePath(optarg, args->front(), static_cast<char>(c));
-        opt.writable_files.push_back(strdup(optarg));
-        break;
-      case 'i':
-        ValidateIsAbsolutePath(optarg, args->front(), static_cast<char>(c));
-        opt.inaccessible_files.push_back(strdup(optarg));
+        opt.writable_files.emplace_back(optarg);
         break;
       case 'e':
         ValidateIsAbsolutePath(optarg, args->front(), static_cast<char>(c));
-        opt.tmpfs_dirs.push_back(strdup(optarg));
+        opt.tmpfs_dirs.emplace_back(optarg);
         break;
       case 'M':
         ValidateIsAbsolutePath(optarg, args->front(), static_cast<char>(c));
         // Add the current source path to both source and target lists
-        opt.bind_mount_sources.push_back(strdup(optarg));
-        opt.bind_mount_targets.push_back(strdup(optarg));
+        opt.bind_mount_sources.emplace_back(optarg);
+        opt.bind_mount_targets.emplace_back(optarg);
         source_specified = true;
         break;
       case 'm':
@@ -205,7 +159,7 @@ static void ParseCommandLine(unique_ptr<vector<char *>> args) {
                 "The -m option must be strictly preceded by an -M option.");
         }
         opt.bind_mount_targets.pop_back();
-        opt.bind_mount_targets.push_back(strdup(optarg));
+        opt.bind_mount_targets.emplace_back(optarg);
         source_specified = false;
         break;
       case 'H':
@@ -215,7 +169,20 @@ static void ParseCommandLine(unique_ptr<vector<char *>> args) {
         opt.create_netns = true;
         break;
       case 'R':
+        if (opt.fake_username) {
+          Usage(args->front(),
+                "The -R option cannot be used at the same time us the -U "
+                "option.");
+        }
         opt.fake_root = true;
+        break;
+      case 'U':
+        if (opt.fake_root) {
+          Usage(args->front(),
+                "The -U option cannot be used at the same time us the -R "
+                "option.");
+        }
+        opt.fake_username = true;
         break;
       case 'D':
         opt.debug = true;
@@ -292,9 +259,7 @@ void ParseOptions(int argc, char *argv[]) {
     Usage(args.front(), "No command specified.");
   }
 
-  opt.tmpfs_dirs.push_back("/tmp");
-
-  if (opt.working_dir == NULL) {
+  if (opt.working_dir.empty()) {
     opt.working_dir = getcwd(NULL, 0);
   }
 }

@@ -16,22 +16,16 @@ package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSet.Builder;
-import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
 import com.google.devtools.build.lib.util.Preconditions;
-import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /** Helper methods that are shared by the different sandboxing strategies in this package. */
 public final class SandboxHelpers {
@@ -53,7 +47,7 @@ public final class SandboxHelpers {
   public static ImmutableSet<PathFragment> getOutputFiles(Spawn spawn) {
     Builder<PathFragment> outputFiles = ImmutableSet.builder();
     for (ActionInput output : spawn.getOutputFiles()) {
-      outputFiles.add(new PathFragment(output.getExecPathString()));
+      outputFiles.add(PathFragment.create(output.getExecPathString()));
     }
     return outputFiles.build();
   }
@@ -76,17 +70,5 @@ public final class SandboxHelpers {
 
     // Network access is allowed by default.
     return true;
-  }
-
-  static void postActionStatusMessage(EventBus eventBus, Spawn spawn) {
-    eventBus.post(ActionStatusMessage.runningStrategy(spawn.getResourceOwner(), "sandbox"));
-  }
-
-  static Path getSandboxRoot(
-      BlazeDirectories blazeDirs, String productName, UUID uuid, AtomicInteger execCounter) {
-    return blazeDirs
-        .getOutputBase()
-        .getRelative(productName + "-sandbox")
-        .getRelative(uuid + "-" + execCounter.getAndIncrement());
   }
 }

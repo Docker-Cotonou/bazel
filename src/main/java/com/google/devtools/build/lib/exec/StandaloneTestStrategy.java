@@ -22,6 +22,7 @@ import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
+import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
@@ -100,7 +101,10 @@ public class StandaloneTestStrategy extends TestStrategy {
             action.isEnableRunfiles());
     Path tmpDir =
         tmpDirRoot.getChild(
-            getTmpDirName(action.getExecutionSettings().getExecutable().getExecPath()));
+            getTmpDirName(
+                action.getExecutionSettings().getExecutable().getExecPath(),
+                action.getShardNum(),
+                action.getRunNumber()));
     Map<String, String> env = setupEnvironment(action, execRoot, runfilesDir, tmpDir);
     Path workingDirectory = runfilesDir.getRelative(action.getRunfilesPrefix());
 
@@ -111,6 +115,12 @@ public class StandaloneTestStrategy extends TestStrategy {
     info.put("timeout", "" + getTimeout(action));
     info.putAll(action.getTestProperties().getExecutionInfo());
 
+    ResourceSet localResourceUsage =
+        action
+            .getTestProperties()
+            .getLocalResourceUsage(
+                action.getOwner().getLabel(), executionOptions.usingLocalTestJobs());
+
     Spawn spawn =
         new SimpleSpawn(
             action,
@@ -118,14 +128,12 @@ public class StandaloneTestStrategy extends TestStrategy {
             ImmutableMap.copyOf(env),
             ImmutableMap.copyOf(info),
             new RunfilesSupplierImpl(
-                runfilesDir.asFragment(), action.getExecutionSettings().getRunfiles()),
-            /*inputs=*/ImmutableList.copyOf(action.getInputs()),
-            /*tools=*/ImmutableList.<Artifact>of(),
-            /*filesetManifests=*/ImmutableList.<Artifact>of(),
+                runfilesDir.relativeTo(execRoot), action.getExecutionSettings().getRunfiles()),
+            /*inputs=*/ ImmutableList.copyOf(action.getInputs()),
+            /*tools=*/ ImmutableList.<Artifact>of(),
+            /*filesetManifests=*/ ImmutableList.<Artifact>of(),
             ImmutableList.copyOf(action.getSpawnOutputs()),
-            action
-                .getTestProperties()
-                .getLocalResourceUsage(executionOptions.usingLocalTestJobs()));
+            localResourceUsage);
 
     Executor executor = actionExecutionContext.getExecutor();
 
@@ -170,8 +178,13 @@ public class StandaloneTestStrategy extends TestStrategy {
           .getEventBus()
           .post(
               new TestAttempt(
-                  action, attempt, data.getTestPassed(), data.getRunDurationMillis(),
-                  testOutputsBuilder.build(), true));
+                  action,
+                  attempt,
+                  data.getStatus(),
+                  data.getStartTimeMillisEpoch(),
+                  data.getRunDurationMillis(),
+                  testOutputsBuilder.build(),
+                  true));
       finalizeTest(actionExecutionContext, action, dataBuilder.build());
     } catch (IOException e) {
       executor.getEventHandler().handle(Event.error("Caught I/O exception: " + e));
@@ -214,8 +227,13 @@ public class StandaloneTestStrategy extends TestStrategy {
         .getEventBus()
         .post(
             new TestAttempt(
-                action, attempt, data.getTestPassed(), data.getRunDurationMillis(),
-                testOutputsBuilder.build(), false));
+                action,
+                attempt,
+                data.getStatus(),
+                data.getStartTimeMillisEpoch(),
+                data.getRunDurationMillis(),
+                testOutputsBuilder.build(),
+                false));
     processTestOutput(executor, outErr, new TestResult(action, data, false), testLog);
   }
 
@@ -231,11 +249,12 @@ public class StandaloneTestStrategy extends TestStrategy {
     for (int i = 0; i < data.getFailedLogsCount(); i++) {
       dataBuilder.addFailedLogs(data.getFailedLogs(i));
     }
-    if (data.hasTestPassed()) {
+    if (data.getTestPassed()) {
       dataBuilder.setPassedLog(data.getPassedLog());
     }
     dataBuilder.addTestTimes(data.getTestTimes(0));
     dataBuilder.addAllTestProcessTimes(data.getTestProcessTimesList());
+    dataBuilder.setStartTimeMillisEpoch(data.getStartTimeMillisEpoch());
     dataBuilder.setRunDurationMillis(data.getRunDurationMillis());
     if (data.hasTestCase()) {
       dataBuilder.setTestCase(data.getTestCase());
@@ -324,6 +343,7 @@ public class StandaloneTestStrategy extends TestStrategy {
         }
       } finally {
         long duration = executor.getClock().currentTimeMillis() - startTime;
+        builder.setStartTimeMillisEpoch(startTime);
         builder.addTestTimes(duration);
         builder.addTestProcessTimes(duration);
         builder.setRunDurationMillis(duration);

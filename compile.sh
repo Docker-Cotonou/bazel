@@ -26,7 +26,7 @@ set -o errexit
 # etc, leading to confusing errors.
 export BAZEL_OLD_PATH=$PATH
 case "$(uname -s | tr [:upper:] [:lower:])" in
-msys*|mingw*)
+msys*|mingw*|cygwin*)
   # Check that the PATH is set up correctly by attempting to locate `[`.
   # This ensures that `which` is installed correctly and can succeed, while
   # also avoids accidentally locating a tool that exists in plain Windows too
@@ -114,10 +114,9 @@ if [[ $PLATFORM == "darwin" ]] && \
   EXTRA_BAZEL_ARGS="${EXTRA_BAZEL_ARGS-} --define IPHONE_SDK=1"
 fi
 
-case "${PLATFORM}" in
-msys*|mingw*)
+if [[ $PLATFORM == "windows" ]]; then
   EXTRA_BAZEL_ARGS="${EXTRA_BAZEL_ARGS-} --cpu=x64_windows_msys --host_cpu=x64_windows_msys"
-esac
+fi
 
 source scripts/bootstrap/bootstrap.sh
 
@@ -179,7 +178,7 @@ if [ $DO_SRCS_TEST ]; then
   # See file BUILD for the list of grep -v exceptions.
   # tools/defaults package is hidden by Bazel so cannot be put in the srcs.
   find . -type f | sed -e 's|./||' \
-    | grep -v '^bazel-' | grep -v '^WORKSPACE.user.bzl' \
+    | grep -v '^bazel-' \
     | grep -v '^\.' | grep -v '^out/' | grep -v '^output/' \
     | grep -v '^derived' \
     | grep -Ev "${SRCS_EXCLUDES}" \

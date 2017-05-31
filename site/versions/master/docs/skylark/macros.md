@@ -8,7 +8,7 @@ title: Macros
 
 A macro is a function called from the BUILD file that can instantiate rules.
 Macros don't give additional power, they are just used for encapsulation and
-code reuse. By the end of the [loading phase](concepts.html#evaluation-model),
+code reuse. By the end of the [loading phase](concepts.md#evaluation-model),
 macros don't exist anymore, and Bazel sees only the set of rules they created.
 
 Native rules (i.e. rules that don't need a `load()` statement) can be
@@ -42,7 +42,10 @@ macro), use the constant [PACKAGE_NAME](lib/globals.html#PACKAGE_NAME).
 
 *   You may filter the output based on `generator_function` (which function
     generated the rules) or `generator_name` (the name attribute of the macro),
-    e.g. `$ bazel query --output=build 'attr(generator_function, my_macro, //my/path:all)'`
+    e.g.
+    ```bash
+    $ bazel query --output=build 'attr(generator_function, my_macro, //my/path:all)'
+    ```
 
 *   To find out where exactly the rule `foo` is generated in a BUILD file, you
     can try the following trick. Insert this line near the top of the BUILD

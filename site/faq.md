@@ -178,7 +178,7 @@ Bazel shines at building and testing projects with the following properties:
 Where can I run Bazel?
 ---------------------------------
 
-Currently, Linux and Mac OS X. Porting to other UNIX platforms should be
+Currently, Linux and macOS (OS X). Porting to other UNIX platforms should be
 straightforward, as long as a JDK is available for the platform.
 
 What about Windows?
@@ -269,7 +269,7 @@ Can I build Docker images with Bazel?
 -------------------------------------
 
 Yes, you can use our
-[Docker rules](http://bazel.build/docs/be/docker.html)
+[Docker rules](https://bazel.build/versions/master/docs/be/docker.html)
 to build reproducible Docker images.
 
 Will Bazel make my builds reproducible automatically?

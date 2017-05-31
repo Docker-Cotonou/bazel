@@ -20,6 +20,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Maps.EntryTransformer;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -56,12 +57,17 @@ import javax.annotation.Nullable;
  * Implementation of the {@code android_sdk_repository} rule.
  */
 public class AndroidSdkRepositoryFunction extends RepositoryFunction {
-  private static final PathFragment BUILD_TOOLS_DIR = new PathFragment("build-tools");
-  private static final PathFragment PLATFORMS_DIR = new PathFragment("platforms");
-  private static final PathFragment SYSTEM_IMAGES_DIR = new PathFragment("system-images");
+  private static final PathFragment BUILD_TOOLS_DIR = PathFragment.create("build-tools");
+  private static final PathFragment PLATFORMS_DIR = PathFragment.create("platforms");
+  private static final PathFragment SYSTEM_IMAGES_DIR = PathFragment.create("system-images");
   private static final Revision MIN_BUILD_TOOLS_REVISION = new Revision(24, 0, 3);
   private static final String PATH_ENV_VAR = "ANDROID_HOME";
   private static final ImmutableList<String> PATH_ENV_VAR_AS_LIST = ImmutableList.of(PATH_ENV_VAR);
+  private static final ImmutableList<String> LOCAL_MAVEN_REPOSITORIES =
+      ImmutableList.of(
+          "extras/android/m2repository",
+          "extras/google/m2repository",
+          "extras/m2repository");
 
   @Override
   public boolean isLocal(Rule rule) {
@@ -79,7 +85,7 @@ public class AndroidSdkRepositoryFunction extends RepositoryFunction {
   }
 
   @Override
-  public RepositoryDirectoryValue.Builder fetch(Rule rule, Path outputDirectory,
+  public RepositoryDirectoryValue.Builder fetch(Rule rule, final Path outputDirectory,
       BlazeDirectories directories, Environment env, Map<String, String> markerData)
       throws SkyFunctionException, InterruptedException {
     Map<String, String> environ =
@@ -221,9 +227,15 @@ public class AndroidSdkRepositoryFunction extends RepositoryFunction {
 
     // All local maven repositories that are shipped in the Android SDK.
     // TODO(ajmichael): Create SkyKeys so that if the SDK changes, this function will get rerun.
-    Iterable<Path> localMavenRepositories = ImmutableList.of(
-        outputDirectory.getRelative("extras/android/m2repository"),
-        outputDirectory.getRelative("extras/google/m2repository"));
+    Iterable<Path> localMavenRepositories =
+        Lists.transform(
+            LOCAL_MAVEN_REPOSITORIES,
+            new Function<String, Path>() {
+              @Override
+              public Path apply(String pathFragment) {
+                return outputDirectory.getRelative(pathFragment);
+              }
+            });
     try {
       SdkMavenRepository sdkExtrasRepository =
           SdkMavenRepository.create(Iterables.filter(localMavenRepositories, new Predicate<Path>() {
@@ -250,7 +262,7 @@ public class AndroidSdkRepositoryFunction extends RepositoryFunction {
 
   private static PathFragment getAndroidHomeEnvironmentVar(
       Path workspace, Map<String, String> env) {
-    return workspace.getRelative(new PathFragment(env.get(PATH_ENV_VAR))).asFragment();
+    return workspace.getRelative(PathFragment.create(env.get(PATH_ENV_VAR))).asFragment();
   }
 
   private static String getStringResource(String name) {
@@ -391,14 +403,25 @@ public class AndroidSdkRepositoryFunction extends RepositoryFunction {
     return pathFragments.build();
   }
 
-  /** Gets DirectoryListingValues for subdirectories of the directory or returns null. */
+  /**
+   * Gets DirectoryListingValues for subdirectories of the directory or returns null.
+   *
+   * Ignores all non-directory files.
+   */
   private static ImmutableMap<PathFragment, DirectoryListingValue> getSubdirectoryListingValues(
       final Path root, final PathFragment path, DirectoryListingValue directory, Environment env)
       throws RepositoryFunctionException, InterruptedException {
     Map<PathFragment, SkyKey> skyKeysForSubdirectoryLookups =
         Maps.transformEntries(
             Maps.uniqueIndex(
-                directory.getDirents(),
+                Iterables.filter(
+                    directory.getDirents(),
+                    new Predicate<Dirent>() {
+                      @Override
+                      public boolean apply(Dirent dirent) {
+                        return dirent.getType().equals(Dirent.Type.DIRECTORY);
+                      }
+                    }),
                 new Function<Dirent, PathFragment>() {
                   @Override
                   public PathFragment apply(Dirent input) {

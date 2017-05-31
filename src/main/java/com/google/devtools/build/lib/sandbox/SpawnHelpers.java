@@ -108,7 +108,7 @@ public final class SpawnHelpers {
       // symlink referring to "source" has to be created (see below).
       PathFragment targetPath;
       if (isFilesetManifest) {
-        PathFragment targetPathFragment = new PathFragment(fields[0]);
+        PathFragment targetPathFragment = PathFragment.create(fields[0]);
         if (!workspaceName.isEmpty()) {
           Preconditions.checkState(
               targetPathFragment.getSegment(0).equals(workspaceName),
@@ -145,9 +145,7 @@ public final class SpawnHelpers {
     for (Map.Entry<PathFragment, Map<PathFragment, Artifact>> rootAndMappings :
         rootsAndMappings.entrySet()) {
       PathFragment root = rootAndMappings.getKey();
-      if (root.isAbsolute()) {
-        root = root.relativeTo(execRoot.asFragment());
-      }
+      Preconditions.checkState(!root.isAbsolute());
       for (Map.Entry<PathFragment, Artifact> mapping : rootAndMappings.getValue().entrySet()) {
         Artifact sourceArtifact = mapping.getValue();
         Path source =
@@ -178,7 +176,7 @@ public final class SpawnHelpers {
         // Attempting to mount a non-empty directory results in ERR_DIRECTORY_NOT_EMPTY, so we only
         // mount empty TreeArtifacts as directories.
         if (containedArtifacts.isEmpty()) {
-          PathFragment mount = new PathFragment(input.getExecPathString());
+          PathFragment mount = PathFragment.create(input.getExecPathString());
           mounts.put(mount, execRoot.getRelative(mount));
         }
       }
@@ -188,7 +186,7 @@ public final class SpawnHelpers {
       if (input.getExecPathString().contains("internal/_middlemen/")) {
         continue;
       }
-      PathFragment mount = new PathFragment(input.getExecPathString());
+      PathFragment mount = PathFragment.create(input.getExecPathString());
       mounts.put(mount, execRoot.getRelative(mount));
     }
   }

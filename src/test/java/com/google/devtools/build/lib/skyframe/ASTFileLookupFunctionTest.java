@@ -34,12 +34,10 @@ import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
-
+import java.io.IOException;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.io.IOException;
 
 /**
  * Unit tests of specific functionality of ASTFileLookupFunction.
@@ -116,6 +114,7 @@ public class ASTFileLookupFunctionTest extends BuildViewTestCase {
         "    name = 'a_remote_repo',",
         "    path = '/a_remote_repo'",
         ")");
+    scratch.file("/a_remote_repo/WORKSPACE");
     scratch.file("/a_remote_repo/remote_pkg/BUILD",
         "load(':ext.bzl', 'CONST')");
     scratch.file("/a_remote_repo/remote_pkg/ext.bzl",
@@ -140,6 +139,7 @@ public class ASTFileLookupFunctionTest extends BuildViewTestCase {
         "    name = 'a_remote_repo',",
         "    path = '/a_remote_repo'",
         ")");
+    scratch.file("/a_remote_repo/WORKSPACE");
     scratch.file("/a_remote_repo/remote_pkg/BUILD");
     scratch.file("/a_remote_repo/remote_pkg/ext1.bzl",
         "load(':ext2.bzl', 'CONST')");
@@ -165,10 +165,10 @@ public class ASTFileLookupFunctionTest extends BuildViewTestCase {
     EvaluationResult<ASTFileLookupValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
-    ErrorInfo errorInfo = result.getError(skyKey);
-    Throwable e = errorInfo.getException();
-    assertEquals(skyKey, errorInfo.getRootCauseOfException());
-    assertThat(e).isInstanceOf(ErrorReadingSkylarkExtensionException.class);
-    assertThat(e.getMessage()).contains("no such package '@a_remote_repo//remote_pkg'");
+    assertThat(result.get(skyKey).lookupSuccessful()).isFalse();
+    assertThat(result.get(skyKey).getErrorMsg())
+    .contains("Unable to load package for '@a_remote_repo//remote_pkg:BUILD'");
+    assertThat(result.get(skyKey).getErrorMsg())
+        .contains("The repository could not be resolved");
   }
 }

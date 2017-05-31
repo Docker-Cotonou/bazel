@@ -34,6 +34,7 @@ import org.junit.runners.JUnit4;
 public class CcProtoLibraryTest extends BuildViewTestCase {
   @Before
   public void setUp() throws Exception {
+    scratch.file("protobuf/WORKSPACE");
     scratch.file(
         "protobuf/BUILD",
         "package(default_visibility=['//visibility:public'])",
@@ -148,6 +149,7 @@ public class CcProtoLibraryTest extends BuildViewTestCase {
     scratch.file(
         "x/BUILD", "cc_proto_library(name = 'foo_cc_proto', deps = ['@bla//foo:bar_proto'])");
 
+    scratch.file("/bla/WORKSPACE");
     // Create the rule '@bla//foo:bar_proto'.
     scratch.file(
         "/bla/foo/BUILD",
@@ -169,6 +171,21 @@ public class CcProtoLibraryTest extends BuildViewTestCase {
             String.format(
                 "--cpp_out=%s/external/bla",
                 getTargetConfiguration().getGenfilesFragment().toString()));
+  }
+
+  @Test
+  public void commandLineControlsOutputFileSuffixes() throws Exception {
+    useConfiguration(
+        "--cc_proto_library_header_suffixes=.pb.h,.proto.h",
+        "--cc_proto_library_source_suffixes=.pb.cc,.pb.cc.meta");
+    scratch.file(
+        "x/BUILD",
+        "cc_proto_library(name = 'foo_cc_proto', deps = ['foo_proto'])",
+        "proto_library(name = 'foo_proto', srcs = ['foo.proto'])");
+
+    assertThat(prettyArtifactNames(getFilesToBuild(getConfiguredTarget("//x:foo_cc_proto"))))
+        .containsExactly("x/foo.pb.cc", "x/foo.pb.h", "x/foo.pb.cc.meta", "x/foo.proto.h",
+            "x/libfoo_proto.a", "x/libfoo_proto.so");
   }
 
   // TODO(carmi): test blacklisted protos. I don't currently understand what's the wanted behavior.

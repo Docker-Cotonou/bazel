@@ -49,7 +49,6 @@ import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.events.Location.LineAndColumn;
 import com.google.devtools.build.lib.packages.Attribute.SkylarkComputedDefaultTemplate.CannotPrecomputeDefaultsException;
-import com.google.devtools.build.lib.packages.Attribute.Transition;
 import com.google.devtools.build.lib.packages.Attribute.ValidityPredicate;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
@@ -438,10 +437,12 @@ public class RuleClassTest extends PackageLoadingTestCase {
             ImmutableSet.<Class<?>>of(),
             MissingFragmentPolicy.FAIL_ANALYSIS,
             true,
+            attr("name", STRING).build(),
             attr("outs", OUTPUT_LIST).build());
 
     Map<String, Object> attributeValues = new HashMap<>();
     attributeValues.put("outs", Collections.singletonList("explicit_out"));
+    attributeValues.put("name", "myrule");
 
     Rule rule = createRule(ruleClassC, "myrule", attributeValues, testRuleLocation);
 
@@ -678,10 +679,12 @@ public class RuleClassTest extends PackageLoadingTestCase {
             ImmutableSet.<Class<?>>of(),
             MissingFragmentPolicy.FAIL_ANALYSIS,
             true,
+            attr("name", STRING).build(),
             attr("outs", OUTPUT_LIST).build());
 
     Map<String, Object> attributeValues = new HashMap<>();
     attributeValues.put("outs", ImmutableList.of("third", "fourth"));
+    attributeValues.put("name", "myrule");
 
     Rule rule = createRule(ruleClassC, "myrule", attributeValues, testRuleLocation);
 
@@ -861,7 +864,7 @@ public class RuleClassTest extends PackageLoadingTestCase {
       boolean outputsDefaultExecutable,
       ImplicitOutputsFunction implicitOutputsFunction,
       Configurator<?, ?> configurator,
-      Transition transition,
+      RuleTransitionFactory transitionFactory,
       ConfiguredTargetFactory<?, ?> configuredTargetFactory,
       PredicateWithMessage<Rule> validityPredicate,
       Predicate<String> preferredDependencyPredicate,
@@ -888,14 +891,16 @@ public class RuleClassTest extends PackageLoadingTestCase {
         workspaceOnly,
         outputsDefaultExecutable,
         implicitOutputsFunction,
+        /*isConfigMatcher=*/ false,
         configurator,
-        transition,
+        transitionFactory,
         configuredTargetFactory,
         validityPredicate,
         preferredDependencyPredicate,
         advertisedProviders,
         configuredTargetFunction,
         externalBindingsFunction,
+        /*optionReferenceFunction=*/ RuleClass.NO_OPTION_REFERENCE,
         ruleDefinitionEnvironment,
         ruleDefinitionEnvironmentHashCode,
         new ConfigurationFragmentPolicy.Builder()

@@ -18,13 +18,10 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.packages.ClassObjectConstructor;
 import com.google.devtools.build.lib.packages.FileTarget;
-import com.google.devtools.build.lib.packages.SkylarkClassObject;
 import com.google.devtools.build.lib.rules.fileset.FilesetProvider;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.util.FileType;
-import javax.annotation.Nullable;
 
 /**
  * A ConfiguredTarget for a source FileTarget.  (Generated files use a
@@ -40,12 +37,15 @@ public abstract class FileConfiguredTarget extends AbstractConfiguredTarget
     super(targetContext);
     NestedSet<Artifact> filesToBuild = NestedSetBuilder.create(Order.STABLE_ORDER, artifact);
     this.artifact = artifact;
+    FileProvider fileProvider = new FileProvider(filesToBuild);
+    FilesToRunProvider filesToRunProvider =
+        FilesToRunProvider.fromSingleExecutableArtifact(artifact);
     TransitiveInfoProviderMap.Builder builder =
         TransitiveInfoProviderMap.builder()
             .put(VisibilityProvider.class, this)
             .put(LicensesProvider.class, this)
-            .add(new FileProvider(filesToBuild))
-            .add(FilesToRunProvider.fromSingleExecutableArtifact(artifact));
+            .add(fileProvider)
+            .add(filesToRunProvider);
     if (this instanceof FilesetProvider) {
       builder.put(FilesetProvider.class, this);
     }
@@ -80,12 +80,6 @@ public abstract class FileConfiguredTarget extends AbstractConfiguredTarget
 
   @Override
   public Object get(String providerKey) {
-    return null;
-  }
-
-  @Nullable
-  @Override
-  public SkylarkClassObject get(ClassObjectConstructor.Key providerKey) {
     return null;
   }
 }

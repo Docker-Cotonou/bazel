@@ -157,6 +157,11 @@ public class AndroidNdkCrosstoolsTest {
 
         // Test that all tool paths exist.
         for (ToolPath toolpath : toolchain.getToolPathList()) {
+          // TODO(tmsriram): Not all crosstools contain llvm-profdata tool yet, remove
+          // the check once llvm-profdata becomes always available.
+          if (toolpath.getPath().contains("llvm-profdata")) {
+            continue;
+          }
           assertThat(ndkFiles).contains(toolpath.getPath());
         }
 
@@ -180,6 +185,26 @@ public class AndroidNdkCrosstoolsTest {
           if (!flag.equals("-isystem")) {
             flag = NdkPaths.stripRepositoryPrefix(flag);
             assertThat(ndkDirectories).contains(flag);
+          }
+        }
+      }
+    }
+  }
+
+  // Regression test for b/36091573
+  @Test
+  public void testBuiltinIncludesDirectories() {
+    for (CrosstoolRelease crosstool : crosstoolReleases) {
+      for (CToolchain toolchain : crosstool.getToolchainList()) {
+        // Each toolchain has at least one built-in include directory
+        assertThat(toolchain.getCxxBuiltinIncludeDirectoryList()).isNotEmpty();
+
+        for (String flag : toolchain.getUnfilteredCxxFlagList()) {
+          // This list only contains "-isystem" and the values after "-isystem".
+          if (!flag.equals("-isystem")) {
+            // We should NOT be setting -isystem for the builtin includes directories. They are
+            // already on the search list and adding the -isystem flag just changes their priority.
+            assertThat(toolchain.getCxxBuiltinIncludeDirectoryList()).doesNotContain(flag);
           }
         }
       }

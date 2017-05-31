@@ -228,6 +228,10 @@ else
   CLASSPATH=%classpath%
 fi
 
+# Export the locations which will be used to find the location of the classes from the classpath file.
+export SELF_LOCATION="$self"
+export CLASSLOADER_PREFIX_PATH="${RUNPATH}"
+
 # If using Jacoco in offline instrumentation mode, the CLASSPATH contains instrumented files.
 # We need to make the metadata jar with uninstrumented classes available for generating
 # the lcov-compatible coverage report, and we don't want it on the classpath.
@@ -236,6 +240,10 @@ fi
 if [[ -n "$JVM_DEBUG_PORT" ]]; then
   JVM_DEBUG_SUSPEND=${DEFAULT_JVM_DEBUG_SUSPEND:-"y"}
   JVM_DEBUG_FLAGS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=${JVM_DEBUG_SUSPEND},address=${JVM_DEBUG_PORT}"
+
+  if [[ "$PERSISTENT_TEST_RUNNER" == "true" ]]; then
+    JVM_DEBUG_FLAGS+=",quiet=y"
+  fi
 fi
 
 if [[ -n "$MAIN_ADVICE_CLASSPATH" ]]; then

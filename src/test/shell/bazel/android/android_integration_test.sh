@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# For this tests to run do the following:
-# 1. Uncomment the 2 lines regarding android integration tests in the WORKSPACE
-# file.
-# 2. Set the environment variables ANDROID_HOME and ANDROID_NDK accordingly to
-# your Android SDK and NDK home directories.
-# 3. Run scripts/workspace_user.sh.
+# For these tests to run do the following:
+#
+#   1. Install an Android SDK and NDK from https://developer.android.com
+#   2. Set the $ANDROID_HOME and $ANDROID_NDK_HOME environment variables
+#   3. Uncomment the two lines in WORKSPACE containing android_sdk_repository
+#      and android_ndk_repository
 #
 # Note that if the environment is not set up as above android_integration_test
 # will silently be ignored and will be shown as passing.
@@ -171,6 +171,7 @@ function check_num_sos() {
 }
 
 function check_soname() {
+  unzip -p bazel-bin/java/bazel/bin.apk lib/x86/libbin.so > libbin.so
   # For an android_binary with name foo, readelf output format is
   #  Tag        Type          Name/Value
   # 0x00000010 (SONAME)       Library soname: [libfoo]
@@ -181,7 +182,7 @@ function check_soname() {
   # includes readelf however the path is difference for Mac vs Linux, hence the
   # star.
   readelf="${TEST_SRCDIR}/androidndk/ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/*/bin/arm-linux-androideabi-readelf"
-  soname=$($readelf -d bazel-bin/java/bazel/_dx/bin/native_symlinks/x86/libbin.so \
+  soname=$($readelf -d libbin.so \
     | grep SONAME \
     | awk '{print substr($5,2,length($5)-2)}')
   assert_equals "libbin" "$soname"

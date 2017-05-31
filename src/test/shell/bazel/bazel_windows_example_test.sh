@@ -33,9 +33,11 @@ fi
 
 function set_up() {
   copy_examples
-  export PATH=/c/python_27_amd64/files:$PATH
-  EXTRA_BAZELRC="build --cpu=x64_windows_msvc"
   setup_bazelrc
+  cat >>"$TEST_TMPDIR/bazelrc" <<EOF
+startup --batch
+build --cpu=x64_windows_msvc
+EOF
 }
 
 # An assertion that execute a binary from a sub directory (to test runfiles)
@@ -55,6 +57,10 @@ function assert_binary_run_from_subdir() {
 function test_cpp() {
   local cpp_pkg=examples/cpp
   assert_build_output ./bazel-bin/${cpp_pkg}/libhello-lib.a ${cpp_pkg}:hello-world
+  assert_build_output ./bazel-bin/${cpp_pkg}/hello-world.pdb ${cpp_pkg}:hello-world --output_groups=pdb_file
+  assert_build_output ./bazel-bin/${cpp_pkg}/hello-world.pdb -c dbg ${cpp_pkg}:hello-world --output_groups=pdb_file
+  assert_build -c opt ${cpp_pkg}:hello-world --output_groups=pdb_file
+  test -f ./bazel-bin/${cpp_pkg}/hello-world.pdb && fail "PDB file should not be generated in OPT mode"
   assert_bazel_run "//examples/cpp:hello-world foo" "Hello foo"
   assert_test_ok "//examples/cpp:hello-success_test"
   assert_test_fails "//examples/cpp:hello-fail_test"
@@ -112,20 +118,19 @@ function test_java() {
   assert_binary_run_from_subdir "bazel-bin/${java_pkg}/hello-world foo" "Hello foo"
 }
 
-# TODO(pcloudy): Re-enable this test case after fixing https://github.com/bazelbuild/bazel/issues/2558
-# function test_java_test() {
-#   setup_javatest_support
-#   local java_native_tests=//examples/java-native/src/test/java/com/example/myproject
-#   local java_native_main=//examples/java-native/src/main/java/com/example/myproject
+function test_java_test() {
+  setup_javatest_support
+  local java_native_tests=//examples/java-native/src/test/java/com/example/myproject
+  local java_native_main=//examples/java-native/src/main/java/com/example/myproject
 
-#   assert_build "-- //examples/java-native/... -${java_native_main}:hello-error-prone"
-#   assert_build_fails "${java_native_main}:hello-error-prone" \
-#       "Did you mean 'result = b == -1;'?"
-#   assert_test_ok "${java_native_tests}:hello"
-#   assert_test_ok "${java_native_tests}:custom"
-#   assert_test_fails "${java_native_tests}:fail"
-#   assert_test_fails "${java_native_tests}:resource-fail"
-# }
+  assert_build "-- //examples/java-native/... -${java_native_main}:hello-error-prone"
+  assert_build_fails "${java_native_main}:hello-error-prone" \
+      "Did you mean 'result = b == -1;'?"
+  assert_test_ok "${java_native_tests}:hello"
+  assert_test_ok "${java_native_tests}:custom"
+  assert_test_fails "${java_native_tests}:fail"
+  assert_test_fails "${java_native_tests}:resource-fail"
+}
 
 function test_native_python() {
   # On windows, we build a python executable zip as the python binary
@@ -140,6 +145,18 @@ function test_native_python() {
   expect_log "Fib(5) == 8"
   assert_test_ok //examples/py_native:test
   assert_test_fails //examples/py_native:fail
+}
+
+function test_native_python_with_python3() {
+  PYTHON3_PATH=${PYTHON3_PATH:-/c/Program Files/Anaconda3}
+  if [ ! -x "${PYTHON3_PATH}/python.exe" ]; then
+    warn "Python3 binary not found under $PYTHON3_PATH, please set PYTHON3_PATH correctly"
+  else
+    # Shutdown bazel to ensure python path get updated.
+    export BAZEL_PYTHON="${PYTHON3_PATH}/python.exe"
+    export PATH="${PYTHON3_PATH}:$PATH"
+    test_native_python
+  fi
 }
 
 run_suite "examples on Windows"

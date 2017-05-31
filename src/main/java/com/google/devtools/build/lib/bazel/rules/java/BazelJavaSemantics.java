@@ -16,6 +16,9 @@ package com.google.devtools.build.lib.bazel.rules.java;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 
+import com.google.common.base.Function;
+import com.google.common.base.Joiner;
+import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -24,7 +27,6 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
-import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
@@ -35,17 +37,20 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.bazel.rules.BazelConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Compression;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
+import com.google.devtools.build.lib.rules.java.JavaCompilationArgs;
+import com.google.devtools.build.lib.rules.java.JavaCompilationArgs.ClasspathType;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArtifacts;
 import com.google.devtools.build.lib.rules.java.JavaCompilationHelper;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaHelper;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
-import com.google.devtools.build.lib.rules.java.JavaRunfilesProvider;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaTargetAttributes;
@@ -75,6 +80,10 @@ public class BazelJavaSemantics implements JavaSemantics {
       Template.forResource(BazelJavaSemantics.class, "java_stub_template.txt");
   private static final Template STUB_SCRIPT_WINDOWS =
       Template.forResource(BazelJavaSemantics.class, "java_stub_template_windows.txt");
+  private static final String CLASSPATH_PLACEHOLDER = "%classpath%";
+  private static final String RELATIVE_CLASSPATHS_PLACEHOLDER = "%relative_classpath%";
+  private static final Template CLASSPATH_FILE_TEMPLATE =
+      Template.forString(RELATIVE_CLASSPATHS_PLACEHOLDER);
 
   private static final String JAVABUILDER_CLASS_NAME =
       "com.google.devtools.build.buildjar.BazelJavaBuilder";
@@ -85,7 +94,6 @@ public class BazelJavaSemantics implements JavaSemantics {
       "com.google.testing.junit.runner.BazelTestRunner";
   private static final String EXPERIMENTAL_TEST_RUNNER_MAIN_CLASS =
       "com.google.testing.junit.runner.ExperimentalTestRunner";
-  private static final String EXPERIMENTAL_TESTRUNNER_TAG = "experimental_testrunner";
 
   private BazelJavaSemantics() {
   }
@@ -136,7 +144,7 @@ public class BazelJavaSemantics implements JavaSemantics {
       }
     } else {
       if (ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)) {
-        return useExperimentalTestRunner(ruleContext)
+        return ruleContext.getFragment(JavaConfiguration.class).useExperimentalTestRunner()
             ? EXPERIMENTAL_TEST_RUNNER_MAIN_CLASS
             : BAZEL_TEST_RUNNER_MAIN_CLASS;
       }
@@ -144,9 +152,9 @@ public class BazelJavaSemantics implements JavaSemantics {
     return mainClass;
   }
 
-  private static boolean useExperimentalTestRunner(RuleContext ruleContext) {
-    List<String> tags = ruleContext.attributes().get("tags", Type.STRING_LIST);
-    return tags.contains(EXPERIMENTAL_TESTRUNNER_TAG);
+  private boolean isExperimentalJavaTest(RuleContext ruleContext) {
+    return TargetUtils.isTestRule(ruleContext.getRule())
+        && getMainClassFromRule(ruleContext).equals(EXPERIMENTAL_TEST_RUNNER_MAIN_CLASS);
   }
 
   private void checkMainClass(RuleContext ruleContext, ImmutableList<Artifact> sources) {
@@ -195,8 +203,8 @@ public class BazelJavaSemantics implements JavaSemantics {
     private final boolean isRunfilesEnabled;
 
     ComputedClasspathSubstitution(
-        String key, NestedSet<Artifact> jars, String workspacePrefix, boolean isRunfilesEnabled) {
-      super(key);
+        NestedSet<Artifact> jars, String workspacePrefix, boolean isRunfilesEnabled) {
+      super(CLASSPATH_PLACEHOLDER);
       this.jars = jars;
       this.workspacePrefix = workspacePrefix;
       this.isRunfilesEnabled = isRunfilesEnabled;
@@ -218,7 +226,7 @@ public class BazelJavaSemantics implements JavaSemantics {
         if (!isRunfilesEnabled) {
           buffer.append("$(rlocation ");
           PathFragment runfilePath =
-              new PathFragment(new PathFragment(workspacePrefix), artifact.getRunfilesPath());
+              PathFragment.create(PathFragment.create(workspacePrefix), artifact.getRunfilesPath());
           buffer.append(runfilePath.normalize().getPathString());
           buffer.append(")");
         } else {
@@ -256,10 +264,37 @@ public class BazelJavaSemantics implements JavaSemantics {
     arguments.add(Substitution.of("%needs_runfiles%",
         ruleContext.getFragment(Jvm.class).getJavaExecutable().isAbsolute() ? "0" : "1"));
 
-    NestedSet<Artifact> classpath = javaCommon.getRuntimeClasspath();
-    arguments.add(
-        new ComputedClasspathSubstitution(
-            "%classpath%", classpath, workspacePrefix, isRunfilesEnabled));
+    TransitiveInfoCollection testSupport = getTestSupport(ruleContext);
+    NestedSet<Artifact> testSupportJars =
+        testSupport == null
+            ? NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER)
+            : getRuntimeJarsForTargets(testSupport);
+
+    NestedSetBuilder<Artifact> classpathBuilder = NestedSetBuilder.naiveLinkOrder();
+    classpathBuilder.addTransitive(javaCommon.getRuntimeClasspath());
+    if (enforceExplicitJavaTestDeps(ruleContext)) {
+      // Currently, this is only needed when --explicit_java_test_deps=true, as otherwise the
+      // testSupport classpath is wrongly present in the javaCommon.getRuntimeClasspath().
+      classpathBuilder.addTransitive(testSupportJars);
+    }
+    NestedSet<Artifact> classpath = classpathBuilder.build();
+
+    if (isExperimentalJavaTest(ruleContext)) {
+      if (!isRunfilesEnabled) {
+        ruleContext.ruleError(
+            "ExperimentalTestRunner can't work on Windows since Windows doesn't support runfiles.");
+      }
+      if (testSupport == null) {
+        // This may happen when the user sets use_testrunner=0 and manually chooses
+        // main_class=ExperimentalTestRunner.
+        ruleContext.ruleError("Unexpected usage of ExperimentalTestRunner.");
+      }
+      // Keep only the locations containing the classes to start the test runner itself within,
+      // classpath variable, and place all the paths required for the test run in a classpaths file,
+      // so that the classes for the test target may be loaded by a separate ClassLoader.
+      classpath = testSupportJars;
+    }
+    arguments.add(new ComputedClasspathSubstitution(classpath, workspacePrefix, isRunfilesEnabled));
 
     JavaCompilationArtifacts javaArtifacts = javaCommon.getJavaCompilationArtifacts();
     String path =
@@ -310,6 +345,58 @@ public class BazelJavaSemantics implements JavaSemantics {
     }
   }
 
+  private static boolean enforceExplicitJavaTestDeps(RuleContext ruleContext) {
+    return ruleContext.getFragment(JavaConfiguration.class).explicitJavaTestDeps();
+  }
+
+  /**
+   * Substitutes the placeholder with {@link File#pathSeparatorChar} separated relative classpaths.
+   */
+  private static class ComputedRelativeClasspathsSubstitution extends ComputedSubstitution {
+    private final JavaCommon javaCommon;
+    private static final Function<Artifact, String> PATHS_FROM_ARTIFACTS =
+        new Function<Artifact, String>() {
+          @Nullable
+          @Override
+          public String apply(@Nullable Artifact artifact) {
+            return artifact == null ? null : artifact.getRunfilesPathString();
+          }
+        };
+
+    public ComputedRelativeClasspathsSubstitution(JavaCommon javaCommon) {
+      super(RELATIVE_CLASSPATHS_PLACEHOLDER);
+      this.javaCommon = javaCommon;
+    }
+
+    @Override
+    public String getValue() {
+      // TODO(kush): Get this to work when runfilesEnabled=false, like in windows.
+      Iterable<String> paths =
+          Iterables.transform(javaCommon.getRuntimeClasspath(), PATHS_FROM_ARTIFACTS);
+      return Joiner.on(File.pathSeparatorChar).skipNulls().join(paths);
+    }
+  }
+
+  @Override
+  public Optional<Artifact> createClasspathsFile(RuleContext ruleContext, JavaCommon javaCommon)
+      throws InterruptedException {
+    if (!isExperimentalJavaTest(ruleContext)) {
+      return Optional.absent();
+    }
+    Artifact classpathFile = ruleContext.getImplicitOutputArtifact(JAVA_TEST_CLASSPATHS_FILE);
+    List<Substitution> substitutions =
+        ImmutableList.<Substitution>of(new ComputedRelativeClasspathsSubstitution(javaCommon));
+
+    ruleContext.registerAction(
+        new TemplateExpansionAction(
+            ruleContext.getActionOwner(),
+            classpathFile,
+            CLASSPATH_FILE_TEMPLATE,
+            substitutions,
+            /*makeExecutable=*/ false));
+    return Optional.of(classpathFile);
+  }
+
   @Nullable
   private TransitiveInfoCollection getTestSupport(RuleContext ruleContext) {
     if (!isJavaBinaryOrJavaTest(ruleContext)) {
@@ -322,11 +409,23 @@ public class BazelJavaSemantics implements JavaSemantics {
     boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
     if (createExecutable && ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)) {
       String testSupport =
-          useExperimentalTestRunner(ruleContext) ? "$experimental_testsupport" : "$testsupport";
+          isExperimentalJavaTest(ruleContext) ? "$experimental_testsupport" : "$testsupport";
       return Iterables.getOnlyElement(ruleContext.getPrerequisites(testSupport, Mode.TARGET));
     } else {
       return null;
     }
+  }
+
+  private static NestedSet<Artifact> getRuntimeJarsForTargets(TransitiveInfoCollection... deps) {
+    // The dep may be a simple JAR and not a java rule, hence we can't simply do
+    // dep.getProvider(JavaCompilationArgsProvider.class).getRecursiveJavaCompilationArgs(),
+    // so we reuse the logic within JavaCompilationArgs to handle both scenarios.
+    JavaCompilationArgs args =
+        JavaCompilationArgs.builder()
+            .addTransitiveTargets(
+                ImmutableList.copyOf(deps), /*recursive=*/ true, ClasspathType.RUNTIME_ONLY)
+            .build();
+    return args.getRuntimeJars();
   }
 
   @Override
@@ -334,8 +433,8 @@ public class BazelJavaSemantics implements JavaSemantics {
       Runfiles.Builder runfilesBuilder) {
     TransitiveInfoCollection testSupport = getTestSupport(ruleContext);
     if (testSupport != null) {
-      runfilesBuilder.addTarget(testSupport, JavaRunfilesProvider.TO_RUNFILES);
-      runfilesBuilder.addTarget(testSupport, RunfilesProvider.DEFAULT_RUNFILES);
+      // Not using addTransitiveArtifacts() due to the mismatch in NestedSet ordering.
+      runfilesBuilder.addArtifacts(getRuntimeJarsForTargets(testSupport));
     }
   }
 
@@ -345,12 +444,19 @@ public class BazelJavaSemantics implements JavaSemantics {
 
   @Override
   public void collectTargetsTreatedAsDeps(
-      RuleContext ruleContext, ImmutableList.Builder<TransitiveInfoCollection> builder) {
+      RuleContext ruleContext,
+      ImmutableList.Builder<TransitiveInfoCollection> builder,
+      ClasspathType type) {
+    if (type == ClasspathType.COMPILE_ONLY && enforceExplicitJavaTestDeps(ruleContext)) {
+      // We add the test support below, but the test framework's deps are not relevant for
+      // COMPILE_ONLY, hence we return here.
+      // TODO(bazel-team): Ideally enforceExplicitJavaTestDeps should be the default behaviour,
+      // since the testSupport deps don't belong to the COMPILE_ONLY classpath, but since many
+      // targets may break, we are keeping it behind this flag.
+      return;
+    }
     TransitiveInfoCollection testSupport = getTestSupport(ruleContext);
     if (testSupport != null) {
-      // TODO(bazel-team): The testsupport is used as the test framework
-      // and really only needs to be on the runtime, not compile-time
-      // classpath.
       builder.add(testSupport);
     }
   }
@@ -411,7 +517,6 @@ public class BazelJavaSemantics implements JavaSemantics {
         ruleContext.attributeError("test_class", "this attribute is only meaningful to "
             + "BazelTestRunner, but you are not using it (use_testrunner = 0)");
       }
-
       return getMainClassInternal(ruleContext, sources);
     }
   }

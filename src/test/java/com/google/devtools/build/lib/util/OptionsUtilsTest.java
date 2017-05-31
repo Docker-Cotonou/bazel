@@ -18,6 +18,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.util.OptionsUtils.PathFragmentListConverter;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -25,13 +26,12 @@ import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionPriority;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
-
+import com.google.devtools.common.options.OptionsParser.OptionUsageRestrictions;
+import java.util.Arrays;
+import java.util.List;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-import java.util.Arrays;
-import java.util.List;
 
 /**
  * Test for {@link OptionsUtils}.
@@ -50,19 +50,25 @@ public class OptionsUtilsTest {
             defaultValue = "beta")
     public String beta;
 
-    @Option(name = "gamma",
-            category = "undocumented",
-            defaultValue = "gamma")
+    @Option(
+      name = "gamma",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      defaultValue = "gamma"
+    )
     public String gamma;
 
-    @Option(name = "delta",
-            category = "undocumented",
-            defaultValue = "delta")
+    @Option(
+      name = "delta",
+      optionUsageRestrictions = OptionUsageRestrictions.UNDOCUMENTED,
+      defaultValue = "delta"
+    )
     public String delta;
 
-    @Option(name = "echo",
-            category = "hidden",
-            defaultValue = "echo")
+    @Option(
+      name = "echo",
+      optionUsageRestrictions = OptionUsageRestrictions.HIDDEN,
+      defaultValue = "echo"
+    )
     public String echo;
   }
 
@@ -71,6 +77,7 @@ public class OptionsUtilsTest {
     OptionsParser parser = OptionsParser.newOptionsParser(IntrospectionExample.class);
     parser.parse("--alpha=no", "--gamma=no", "--echo=no");
     assertEquals("--alpha=no --gamma=no", OptionsUtils.asShellEscapedString(parser));
+    assertEquals(ImmutableList.of("--alpha=no", "--gamma=no"), OptionsUtils.asArgumentList(parser));
   }
 
   @Test
@@ -79,6 +86,7 @@ public class OptionsUtilsTest {
     parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--alpha=no"));
     parser.parse(OptionPriority.COMPUTED_DEFAULT, null, Arrays.asList("--beta=no"));
     assertEquals("--beta=no --alpha=no", OptionsUtils.asShellEscapedString(parser));
+    assertEquals(ImmutableList.of("--beta=no", "--alpha=no"), OptionsUtils.asArgumentList(parser));
   }
 
   public static class BooleanOpts extends OptionsBase {
@@ -98,12 +106,14 @@ public class OptionsUtilsTest {
     OptionsParser parser = OptionsParser.newOptionsParser(BooleanOpts.class);
     parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--b_one", "--nob_two"));
     assertEquals("--b_one --nob_two", OptionsUtils.asShellEscapedString(parser));
+    assertEquals(ImmutableList.of("--b_one", "--nob_two"), OptionsUtils.asArgumentList(parser));
 
     parser = OptionsParser.newOptionsParser(BooleanOpts.class);
     parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--b_one=true", "--b_two=0"));
     assertTrue(parser.getOptions(BooleanOpts.class).bOne);
     assertFalse(parser.getOptions(BooleanOpts.class).bTwo);
     assertEquals("--b_one --nob_two", OptionsUtils.asShellEscapedString(parser));
+    assertEquals(ImmutableList.of("--b_one", "--nob_two"), OptionsUtils.asArgumentList(parser));
   }
 
   @Test
@@ -112,6 +122,8 @@ public class OptionsUtilsTest {
     parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--alpha=one"));
     parser.parse(OptionPriority.COMMAND_LINE, null, Arrays.asList("--alpha=two"));
     assertEquals("--alpha=one --alpha=two", OptionsUtils.asShellEscapedString(parser));
+    assertEquals(
+        ImmutableList.of("--alpha=one", "--alpha=two"), OptionsUtils.asArgumentList(parser));
   }
 
   private static List<PathFragment> list(PathFragment... fragments) {
@@ -119,7 +131,7 @@ public class OptionsUtilsTest {
   }
 
   private PathFragment fragment(String string) {
-    return new PathFragment(string);
+    return PathFragment.create(string);
   }
 
   private List<PathFragment> convert(String input) throws Exception {
@@ -150,7 +162,7 @@ public class OptionsUtilsTest {
   @Test
   public void valueisUnmodifiable() throws Exception {
     try {
-      new PathFragmentListConverter().convert("value").add(new PathFragment("other"));
+      new PathFragmentListConverter().convert("value").add(PathFragment.create("other"));
       fail("could modify value");
     } catch (UnsupportedOperationException expected) {}
   }

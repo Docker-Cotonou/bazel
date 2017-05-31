@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertEventCount;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertEventCountAtLeast;
 import static org.junit.Assert.assertEquals;
@@ -37,6 +38,7 @@ import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.FailAction;
 import com.google.devtools.build.lib.analysis.BuildView.AnalysisResult;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
@@ -59,6 +61,8 @@ import com.google.devtools.build.skyframe.NotifyingHelper.Listener;
 import com.google.devtools.build.skyframe.NotifyingHelper.Order;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.TrackingAwaiter;
+import com.google.devtools.common.options.Options;
+import com.google.devtools.common.options.OptionsParsingException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -158,7 +162,7 @@ public class BuildViewTest extends BuildViewTestBase {
         outputArtifact.getRoot());
     assertEquals(outputCT.getConfiguration().getBinFragment().getRelative("pkg/a.out"),
         outputArtifact.getExecPath());
-    assertEquals(new PathFragment("pkg/a.out"), outputArtifact.getRootRelativePath());
+    assertEquals(PathFragment.create("pkg/a.out"), outputArtifact.getRootRelativePath());
 
     Action action = getGeneratingAction(outputArtifact);
     assertSame(FailAction.class, action.getClass());
@@ -384,20 +388,24 @@ public class BuildViewTest extends BuildViewTestBase {
   }
 
   /**
-   * Tests that the {@code --configuration short name} option cannot be used on
+   * Tests that the {@code --output directory name} option cannot be used on
    * the command line.
    */
   @Test
   public void testConfigurationShortName() throws Exception {
-    useConfiguration("--output directory name=foo");
-    reporter.removeHandler(failFastHandler);
+    // Check that output directory name is still the name, otherwise this test is not testing what
+    // we expect.
+    BuildConfiguration.Options options = Options.getDefaults(BuildConfiguration.Options.class);
+    options.outputDirectoryName = "/home/wonkaw/wonka_chocolate/factory/out";
+    assertWithMessage("The flag's name may have been changed; this test may need to be updated.")
+        .that(options.asMap().get("output directory name"))
+        .isEqualTo("/home/wonkaw/wonka_chocolate/factory/out");
+
     try {
-      update(defaultFlags());
+      useConfiguration("--output directory name=foo");
       fail();
-    } catch (InvalidConfigurationException e) {
-      assertThat(e).hasMessage("Build options are invalid");
-      assertContainsEvent(
-          "The internal '--output directory name' option cannot be used on the command line");
+    } catch (OptionsParsingException e) {
+      assertThat(e).hasMessage("Unrecognized option: --output directory name=foo");
     }
   }
 
@@ -767,9 +775,9 @@ public class BuildViewTest extends BuildViewTestBase {
     Path cycles2BuildFilePath = scratch.file("cycles2/BUILD",
         "sh_library(name = 'cycles2', srcs = glob(['*.sh']))");
     cycles1BuildFilePath.getParentDirectory().getRelative("cycles1.sh").createSymbolicLink(
-        new PathFragment("cycles1.sh"));
+        PathFragment.create("cycles1.sh"));
     cycles2BuildFilePath.getParentDirectory().getRelative("cycles2.sh").createSymbolicLink(
-        new PathFragment("cycles2.sh"));
+        PathFragment.create("cycles2.sh"));
     reporter.removeHandler(failFastHandler);
     EventBus eventBus = new EventBus();
     LoadingFailureRecorder recorder = new LoadingFailureRecorder();
