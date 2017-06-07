@@ -297,6 +297,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
               actionExecutionContext.getActionInputFileCache(),
               actionExecutionContext.getExecutor().getContext(FilesetActionContext.class));
       TreeNode inputRoot = repository.buildFromActionInputs(inputMap);
+      System.err.println(">>>RemoteSpawnStrategy " + spawn.getMnemonic() + " " + spawn.getOutputFiles()[0] + ":\n" + inputRoot.toDebugString());
       repository.computeMerkleDigests(inputRoot);
       Command command = buildCommand(spawn.getArguments(), spawn.getEnvironment());
       Action action =
