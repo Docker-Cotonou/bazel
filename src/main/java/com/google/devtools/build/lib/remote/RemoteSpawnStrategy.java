@@ -311,7 +311,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       ActionResult result =
           this.options.remoteAcceptCached ? actionCache.getCachedActionResult(actionKey) : null;
       executor.getEventHandler().handle(Event.of(
-          EventKind.INFO, null, "  found in remote cache: " + (result != null)));
+          EventKind.INFO, null, ContentDigests.toHexString(actionKey.getDigest()) + " found in remote cache: " + (result != null)));
       boolean acceptCachedResult = this.options.remoteAcceptCached;
       if (result != null) {
         // We don't cache failed actions, so we know the outputs exist.
