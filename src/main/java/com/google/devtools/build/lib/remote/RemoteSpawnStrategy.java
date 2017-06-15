@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputFileCache;
+import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
@@ -30,6 +31,7 @@ import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
@@ -310,8 +312,18 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       actionKey = ContentDigests.computeActionKey(action);
       ActionResult result =
           this.options.remoteAcceptCached ? actionCache.getCachedActionResult(actionKey) : null;
+
+      String reason;
+      ActionOwner owner = spawn.getResourceOwner().getOwner();
+      if (owner == null) {
+        reason = spawn.getResourceOwner().prettyPrint();
+      } else {
+        reason = Label.print(owner.getLabel())
+            + " [" + spawn.getResourceOwner().prettyPrint() + "]";
+      }
+
       executor.getEventHandler().handle(Event.of(
-          EventKind.INFO, null, ContentDigests.toHexString(actionKey.getDigest()) + " found in remote cache: " + (result != null)));
+          EventKind.INFO, null, ContentDigests.toHexString(actionKey.getDigest()) + reason + " found in remote cache: " + (result != null)));
       boolean acceptCachedResult = this.options.remoteAcceptCached;
       if (result != null) {
         // We don't cache failed actions, so we know the outputs exist.
