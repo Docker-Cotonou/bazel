@@ -248,6 +248,16 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
     return "remote";
   }
 
+  private static String hexDigest(byte[] digest) {
+    StringBuilder b = new StringBuilder(32);
+    for (int i = 0; i < digest.length; i++) {
+      int n = digest[i];
+      b.append("0123456789abcdef".charAt((n >> 4) & 0xF));
+      b.append("0123456789abcdef".charAt(n & 0xF));
+    }
+    return b.toString();
+  }
+
   /** Executes the given {@code spawn}. */
   @Override
   public void exec(Spawn spawn, ActionExecutionContext actionExecutionContext)
@@ -322,8 +332,13 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
             + " [" + spawn.getResourceOwner().prettyPrint() + "]";
       }
 
-      executor.getEventHandler().handle(Event.of(
-          EventKind.INFO, null, reason + " " + ContentDigests.toHexString(actionKey.getDigest()) + " found in remote cache: " + (result != null)));
+      String message = reason + " " + ContentDigests.toHexString(actionKey.getDigest()) + " found in remote cache: " + (result != null) + ". Inputs:";
+      for (ActionInput i: spawn.getInputFiles()) {
+        message += "\n  " + reason + " " + hexDigest(repository.getInputFileCache().getDigest(i)) + " " + i.getExecPathString();
+      }
+
+      executor.getEventHandler().handle(Event.of(EventKind.INFO, null, message));
+
       boolean acceptCachedResult = this.options.remoteAcceptCached;
       if (result != null) {
         // We don't cache failed actions, so we know the outputs exist.
