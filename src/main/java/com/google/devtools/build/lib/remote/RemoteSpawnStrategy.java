@@ -334,7 +334,12 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
 
       String message = reason + " " + ContentDigests.toHexString(actionKey.getDigest()) + " found in remote cache: " + (result != null) + ". Inputs:";
       for (ActionInput i: spawn.getInputFiles()) {
-        message += "\n  " + reason + " " + hexDigest(repository.getInputFileCache().getDigest(i)) + " " + i.getExecPathString();
+        String digest = "?";
+        try {
+          digest = hexDigest(repository.getInputFileCache().getDigest(i));
+        } catch (Exception e) {
+        }
+        message += "\n  " + reason + " " + digest + " " + i.getExecPathString();
       }
 
       executor.getEventHandler().handle(Event.of(EventKind.INFO, null, message));
