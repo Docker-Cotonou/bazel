@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.remote.ContentDigests.ActionKey;
 import com.google.devtools.build.lib.remote.RemoteProtocol.Action;
@@ -309,6 +310,8 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
       actionKey = ContentDigests.computeActionKey(action);
       ActionResult result =
           this.options.remoteAcceptCached ? actionCache.getCachedActionResult(actionKey) : null;
+      executor.getEventHandler().handle(Event.of(
+          EventKind.INFO, null, "  found in remote cache: " + (result != null)));
       boolean acceptCachedResult = this.options.remoteAcceptCached;
       if (result != null) {
         // We don't cache failed actions, so we know the outputs exist.
