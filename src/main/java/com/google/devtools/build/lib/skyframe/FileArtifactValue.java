@@ -159,10 +159,11 @@ public abstract class FileArtifactValue implements SkyValue {
     private RegularFileArtifactValue(byte[] digest, long size) {
       this.digest = Preconditions.checkNotNull(digest);
       this.size = size;
-      System.err.println(">>>RegularFileArtifactValue " + HashCode.fromBytes(this.digest).toString());
-      if (HashCode.fromBytes(this.digest).toString().equals("59fe5b23d73e5160bc4ff2591ec6edd7")) {
+      String digestStr = HashCode.fromBytes(this.digest).toString();
+      System.err.println(">>>RegularFileArtifactValue " + digestStr);
+      if (digestStr.equals("59fe5b23d73e5160bc4ff2591ec6edd7") || digestStr.equals("216ef1f5c40226775e7e0239ed35497ee17dc3a5")) {
         try {
-          throw new Exception("59fe5b23d73e5160bc4ff2591ec6edd7");
+          throw new Exception(digestStr);
         } catch (Exception e) {
           e.printStackTrace();
         }
