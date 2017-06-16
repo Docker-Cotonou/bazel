@@ -437,7 +437,7 @@ public class ActionCacheChecker {
 
     String d = HashCode.fromBytes(entry.getFileDigest().getDigestBytesUnsafe()).toString();
     if (d.equals("59fe5b23d73e5160bc4ff2591ec6edd7") || d.equals("863a8b41c8c29743f85ea470ba9acc01") ||
-        d.equals("b208d0757da6e5e3f3a386d0d87368e4")) {
+        d.equals("b208d0757da6e5e3f3a386d0d87368e4") || d.equals("41b730c684886c8494846e69f096e879")) {
       int i = 1;
       for (Artifact input : action.getInputs()) {
         System.err.println(">>>middleman " + d + " " + (i++) + " " + HashCode.fromBytes(metadataHandler.getMetadataMaybe(input).digest) + " " + input.getExecPath());
