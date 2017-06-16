@@ -339,7 +339,7 @@ final class RemoteSpawnStrategy implements SpawnActionContext {
           digest = hexDigest(repository.getInputFileCache().getDigest(i));
         } catch (Exception e) {
         }
-        message += "\n  " + reason + " " + digest + " " + i.getExecPathString();
+        message += "\n  " + reason + " " + digest + " " + i.getClass() + " " + i.getExecPathString();
       }
 
       executor.getEventHandler().handle(Event.of(EventKind.INFO, null, message));
