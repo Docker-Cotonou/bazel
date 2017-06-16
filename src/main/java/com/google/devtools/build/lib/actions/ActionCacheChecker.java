@@ -442,8 +442,9 @@ public class ActionCacheChecker {
         d.equals("4d9c169d43418476123091e538782499") || d.equals("41b730c684886c8494846e69f096e879") ||
         d.equals("3460e96f2c5a83d650f7e84b23300c5b")) {
       int i = 1;
+      String pretty = action.getMnemonic() + " " + action.prettyPrint();
       for (Artifact input : action.getInputs()) {
-        System.err.println(">>>middleman " + d + " " + (i++) + " " + HashCode.fromBytes(metadataHandler.getMetadataMaybe(input).digest) + " " + input.getExecPath());
+        System.err.println(">>>middleman " + d + " " + pretty + " " + (i++) + " " + HashCode.fromBytes(metadataHandler.getMetadataMaybe(input).digest) + " " + input.getExecPath());
       }
     }
     metadataHandler.setDigestForVirtualArtifact(middleman, entry.getFileDigest());
