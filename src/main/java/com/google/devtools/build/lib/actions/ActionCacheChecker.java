@@ -18,6 +18,7 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
+import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.cache.ActionCache;
 import com.google.devtools.build.lib.actions.cache.ActionCache.Entry;
@@ -434,6 +435,13 @@ public class ActionCacheChecker {
       }
     }
 
+    String d = HashCode.fromBytes(entry.getFileDigest().getDigestBytesUnsafe()).toString();
+    if (d.equals("59fe5b23d73e5160bc4ff2591ec6edd7") || d.equals("863a8b41c8c29743f85ea470ba9acc01")) {
+      int i = 1;
+      for (Artifact input : action.getInputs()) {
+        System.err.println(">>>middleman " + d + " " + (i++) + " " + HashCode.fromBytes(metadataHandler.getMetadataMaybe(input).digest) + " " + input.getExecPath());
+      }
+    }
     metadataHandler.setDigestForVirtualArtifact(middleman, entry.getFileDigest());
     if (changed) {
       actionCache.put(cacheKey, entry);

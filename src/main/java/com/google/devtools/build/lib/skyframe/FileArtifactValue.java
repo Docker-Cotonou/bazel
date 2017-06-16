@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
+import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.cache.DigestUtils;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -158,6 +159,14 @@ public abstract class FileArtifactValue implements SkyValue {
     private RegularFileArtifactValue(byte[] digest, long size) {
       this.digest = Preconditions.checkNotNull(digest);
       this.size = size;
+      System.err.println(">>>RegularFileArtifactValue " + HashCode.fromBytes(this.digest).toString());
+      if (HashCode.fromBytes(this.digest).toString().equals("59fe5b23d73e5160bc4ff2591ec6edd7")) {
+        try {
+          throw new Exception("59fe5b23d73e5160bc4ff2591ec6edd7");
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+      }
     }
 
     @Override
