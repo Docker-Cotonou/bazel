@@ -444,7 +444,7 @@ public class ActionCacheChecker {
       int i = 1;
       String pretty = action.getMnemonic() + " " + action.prettyPrint();
       for (Artifact input : action.getInputs()) {
-        System.err.println(">>>middleman " + d + " " + pretty + " " + (i++) + " " + HashCode.fromBytes(metadataHandler.getMetadataMaybe(input).digest) + " " + input.getExecPath());
+        System.err.println(">>>middleman input #" + (i++) + " for [" + d + " " + pretty + "]: " + HashCode.fromBytes(metadataHandler.getMetadataMaybe(input).digest) + " " + input.getExecPath());
       }
     }
     metadataHandler.setDigestForVirtualArtifact(middleman, entry.getFileDigest());
