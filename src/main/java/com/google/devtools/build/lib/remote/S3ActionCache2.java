@@ -14,19 +14,14 @@
 
 package com.google.devtools.build.lib.remote;
 
-import com.amazonaws.AbortedException;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.*;
-import com.google.common.hash.HashCode;
-import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.RemoteProtocol.ContentDigest;
 import com.google.devtools.build.lib.vfs.Path;
-import com.google.protobuf.ByteString;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -36,7 +31,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
-import java.util.Collection;
 
 /**
  * xcxc
@@ -44,8 +38,8 @@ import java.util.Collection;
 @ThreadSafe
 public final class S3ActionCache2 {
     private final String bucketName;
-    private final String s3userId;
     private final boolean debug;
+    private String bucketOwner;
 
     private static volatile int numConsecutiveErrors;
     private static volatile long disableUntilTimeMillis;
@@ -58,7 +52,6 @@ public final class S3ActionCache2 {
      */
     public S3ActionCache2(RemoteOptions options) {
         this.bucketName = options.s3CacheBucket;
-        this.s3userId = options.s3FullControlUserId;
         this.debug = options.remoteCacheDebug;
     }
 
@@ -200,6 +193,18 @@ public final class S3ActionCache2 {
         putObject(key, new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
     }
 
+    private synchronized String getBucketOwner() {
+        if (bucketOwner == null) {
+            try {
+                bucketOwner = client.getBucketAcl(bucketName).getOwner().getId();
+                recordCacheSuccessfulOperation();
+            } catch (AmazonClientException e) {
+                recordCacheFailedOperation(e);
+            }
+        }
+        return bucketOwner;
+    }
+
     private void putObject(String key, PutObjectRequest object) {
         if (!isCacheEnabled()) {
             return;
@@ -207,12 +212,11 @@ public final class S3ActionCache2 {
 
         long t0 = System.currentTimeMillis();
         try {
-            if (s3userId != null) {
-                Grantee grantee = new CanonicalGrantee(s3userId);
-                AccessControlList acl = new AccessControlList();
-                acl.grantPermission(grantee, Permission.FullControl);
-                object = object.withAccessControlList(acl);
-            }
+            // Make sure the bucket owner has full control of the uploaded object
+            Grantee grantee = new CanonicalGrantee(getBucketOwner());
+            AccessControlList acl = new AccessControlList();
+            acl.grantPermission(grantee, Permission.FullControl);
+            object = object.withAccessControlList(acl);
 
             client.putObject(object);
             if (debug) {

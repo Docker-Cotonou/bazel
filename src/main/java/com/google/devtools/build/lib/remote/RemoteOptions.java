@@ -49,14 +49,6 @@ public final class RemoteOptions extends OptionsBase {
   )
   public String s3CacheBucket;
 
-  @Option(
-      name = "s3_full_control_userid",
-      defaultValue = "null",
-      category = "remote",
-      help = "An AWS canonical user id for a user who should have full control over uploaded objects"
-  )
-  public String s3FullControlUserId;
-
   @Option(name = "remote_fallback_strategy",
     allowMultiple = true,
     converter = AssignmentConverter.class,
