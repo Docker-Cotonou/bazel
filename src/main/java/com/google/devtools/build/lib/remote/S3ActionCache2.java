@@ -37,9 +37,9 @@ import java.io.BufferedOutputStream;
  */
 @ThreadSafe
 public final class S3ActionCache2 {
-    private final String bucketName;
     private final boolean debug;
-    private String bucketOwner;
+    private static String bucketName;
+    private static String bucketOwner;
 
     private static volatile int numConsecutiveErrors;
     private static volatile long disableUntilTimeMillis;
@@ -51,11 +51,11 @@ public final class S3ActionCache2 {
      * Construct an action cache using JCache API.
      */
     public S3ActionCache2(RemoteOptions options) {
-        this.bucketName = options.s3CacheBucket;
+        bucketName = options.s3CacheBucket;
         this.debug = options.remoteCacheDebug;
     }
 
-    private void recordCacheFailedOperation(Exception e) {
+    private static void recordCacheFailedOperation(Exception e) {
         final int MAX_CONSECUTIVE_ERRORS = 10;
         final int MINUTES_DISABLE_CACHE = 5;
 
@@ -74,11 +74,11 @@ public final class S3ActionCache2 {
         }
     }
 
-    private void recordCacheSuccessfulOperation() {
+    private static void recordCacheSuccessfulOperation() {
         numConsecutiveErrors = 0;
     }
 
-    private boolean isCacheEnabled() {
+    private static boolean isCacheEnabled() {
         if (disableUntilTimeMillis != 0) {
             if (System.currentTimeMillis() > disableUntilTimeMillis) {
                 disableUntilTimeMillis = 0;
@@ -193,7 +193,7 @@ public final class S3ActionCache2 {
         putObject(key, new PutObjectRequest(bucketName, key, new ByteArrayInputStream(blob), new ObjectMetadata()));
     }
 
-    private synchronized String getBucketOwner() {
+    private synchronized static void cacheBucketOwner() {
         if (bucketOwner == null) {
             try {
                 bucketOwner = client.getBucketAcl(bucketName).getOwner().getId();
@@ -202,7 +202,6 @@ public final class S3ActionCache2 {
                 recordCacheFailedOperation(e);
             }
         }
-        return bucketOwner;
     }
 
     private void putObject(String key, PutObjectRequest object) {
@@ -213,10 +212,17 @@ public final class S3ActionCache2 {
         long t0 = System.currentTimeMillis();
         try {
             // Make sure the bucket owner has full control of the uploaded object
-            Grantee grantee = new CanonicalGrantee(getBucketOwner());
-            AccessControlList acl = new AccessControlList();
-            acl.grantPermission(grantee, Permission.FullControl);
-            object = object.withAccessControlList(acl);
+            cacheBucketOwner();
+            if (bucketOwner != null) {
+                // If we couldn't determine the bucket owner, then that's really unfortunate,
+                // because it means the uploaded object will not have the desired permissions,
+                // so some clients won't be able to download it; but it's still worth uploading
+                // for those clients that WILL be able to download it.
+                Grantee grantee = new CanonicalGrantee(bucketOwner);
+                AccessControlList acl = new AccessControlList();
+                acl.grantPermission(grantee, Permission.FullControl);
+                object = object.withAccessControlList(acl);
+            }
 
             client.putObject(object);
             if (debug) {
