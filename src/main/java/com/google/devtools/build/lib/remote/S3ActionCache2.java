@@ -44,6 +44,7 @@ import java.util.Collection;
 @ThreadSafe
 public final class S3ActionCache2 {
     private final String bucketName;
+    private final String s3userId;
     private final boolean debug;
 
     private static volatile int numConsecutiveErrors;
@@ -57,6 +58,7 @@ public final class S3ActionCache2 {
      */
     public S3ActionCache2(RemoteOptions options) {
         this.bucketName = options.s3CacheBucket;
+        this.s3userId = options.s3FullControlUserId;
         this.debug = options.remoteCacheDebug;
     }
 
@@ -205,6 +207,13 @@ public final class S3ActionCache2 {
 
         long t0 = System.currentTimeMillis();
         try {
+            if (s3userId != null) {
+                Grantee grantee = new CanonicalGrantee(s3userId);
+                AccessControlList acl = new AccessControlList();
+                acl.grantPermission(grantee, Permission.FullControl);
+                object = object.withAccessControlList(acl);
+            }
+
             client.putObject(object);
             if (debug) {
                 System.err.println("S3 Cache Upload: key:" + key + "  (" + (System.currentTimeMillis() - t0) + "ms)");
