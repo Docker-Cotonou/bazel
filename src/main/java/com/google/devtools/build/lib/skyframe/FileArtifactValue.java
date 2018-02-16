@@ -194,6 +194,9 @@ public abstract class FileArtifactValue implements SkyValue, Metadata {
       if (proxy == null) {
         return false;
       }
+      if (path.equals("/dev/null")) {
+        return false;
+      }
       FileStatus stat = path.statIfFound(Symlinks.FOLLOW);
       return stat == null || !stat.isFile() || !proxy.equals(FileContentsProxy.create(stat));
     }
